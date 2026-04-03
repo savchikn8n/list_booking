@@ -16,25 +16,34 @@
     <div class="page-shell">
       <header class="page-header">
         <div class="header-copy">
-          <h1>Интерактивный лист броней</h1>
-          <p>Нажми на ячейку, чтобы добавить бронь (минимум 2 часа).</p>
+          <h1 class="page-title">
+            <span>Лист броней на</span>
+            <input
+              id="booking-date"
+              class="title-date-input"
+              name="booking-date"
+              type="date"
+              aria-label="Выбрать день бронирования"
+            />
+          </h1>
         </div>
 
         <div class="header-controls">
-          <div id="sync-status" class="sync-status is-waiting">Синхронизация...</div>
-
           <div class="palette" aria-label="Палитра бронирования">
             <button type="button" class="palette-btn active" data-theme="yellow" aria-label="Желтый"></button>
             <button type="button" class="palette-btn" data-theme="blue" aria-label="Синий"></button>
             <button type="button" class="palette-btn" data-theme="purple" aria-label="Фиолетовый"></button>
             <button type="button" class="palette-btn" data-theme="green" aria-label="Зеленый"></button>
           </div>
-
-          <label class="day-picker" for="booking-date">
-            День
-            <input id="booking-date" name="booking-date" type="date" />
-          </label>
         </div>
+
+        <div
+          id="sync-status"
+          class="sync-status is-waiting"
+          role="status"
+          aria-label="Подключение realtime"
+          title="Подключение realtime"
+        ></div>
       </header>
 
       <main class="board-wrap">

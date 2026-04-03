@@ -31,7 +31,7 @@ const MOBILE_BOARD_BREAKPOINT = 900;
 const MOBILE_TIME_COLUMN_WIDTH = 64;
 const MOBILE_TABLE_COLUMN_WIDTH = 92;
 const MOBILE_HEADER_ROW_HEIGHT = 44;
-const MOBILE_SLOT_ROW_HEIGHT = 28;
+const MOBILE_SLOT_ROW_HEIGHT = 34;
 const KALININGRAD_TIMEZONE = 'Europe/Kaliningrad';
 
 const board = document.getElementById('booking-board');
@@ -118,8 +118,10 @@ function setSyncStatus(text, state) {
   const lastEventLabel = lastRealtimeEventAt
     ? ` | event ${lastRealtimeEventAt.toLocaleTimeString('ru-RU', { hour12: false })}`
     : '';
+  const statusText = `${text}${lastEventLabel}`;
 
-  syncStatus.textContent = `${text}${lastEventLabel}`;
+  syncStatus.title = statusText;
+  syncStatus.setAttribute('aria-label', statusText);
   syncStatus.classList.remove('is-waiting', 'is-live', 'is-error');
   syncStatus.classList.add(`is-${state}`);
 }
@@ -437,8 +439,8 @@ function fitBoardToViewport() {
   const headerRowHeight = clamp(Math.floor(fullHeight * 0.06), 30, 52);
   const baseSlotRowHeight = clamp(
     Math.floor((fullHeight - headerRowHeight) / timeSlots.length),
-    14,
-    36
+    18,
+    42
   );
 
   const usedWidth = firstColumnWidth + baseTableColumnWidth * TABLES.length;

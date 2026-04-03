@@ -34,21 +34,21 @@ body {
 }
 
 .page-header {
+  position: relative;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
+  padding-right: 24px;
 }
 
-.page-header h1 {
+.page-title {
   margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
   font-size: clamp(1.1rem, 2vw, 1.5rem);
-}
-
-.page-header p {
-  margin: 6px 0 0;
-  color: #50473d;
-  font-size: 0.95rem;
 }
 
 .header-copy {
@@ -57,35 +57,56 @@ body {
 
 .header-controls {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 12px;
 }
 
 .sync-status {
-  align-self: center;
-  padding: 8px 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(95, 90, 83, 0.2);
-  background: #fff;
-  font-size: 0.76rem;
-  font-weight: 700;
-  line-height: 1;
-  white-space: nowrap;
+  position: absolute;
+  top: 2px;
+  right: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(31, 27, 24, 0.28);
 }
 
 .sync-status.is-waiting {
-  color: #7a5d1f;
-  background: #fff5d8;
+  background: #f0a61f;
+  box-shadow:
+    0 0 0 3px rgba(240, 166, 31, 0.15),
+    0 0 10px rgba(240, 166, 31, 0.7);
 }
 
 .sync-status.is-live {
-  color: #1e6b35;
-  background: #e3f6e6;
+  background: #1cb65d;
+  box-shadow:
+    0 0 0 3px rgba(28, 182, 93, 0.14),
+    0 0 10px rgba(28, 182, 93, 0.75);
 }
 
 .sync-status.is-error {
-  color: #8b1f1f;
-  background: #fbe3e3;
+  background: #dc2f2f;
+  box-shadow:
+    0 0 0 3px rgba(220, 47, 47, 0.14),
+    0 0 10px rgba(220, 47, 47, 0.7);
+}
+
+.title-date-input {
+  border: 0;
+  border-bottom: 2px solid rgba(95, 90, 83, 0.45);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  padding: 0 2px 2px;
+  cursor: pointer;
+}
+
+.title-date-input:focus-visible {
+  outline: none;
+  border-bottom-color: var(--accent-deep);
 }
 
 .palette {
@@ -132,15 +153,6 @@ body {
   background: #cce8bf;
 }
 
-.day-picker {
-  display: grid;
-  gap: 6px;
-  min-width: 172px;
-  font-size: 0.82rem;
-  font-weight: 600;
-}
-
-.day-picker input,
 .field input,
 .field textarea,
 .field select {
@@ -203,7 +215,7 @@ body {
   align-items: center;
   justify-content: center;
   padding: 2px;
-  font-size: 0.78rem;
+  font-size: 0.84rem;
 }
 
 .corner-cell {
@@ -455,8 +467,7 @@ body {
   }
 
   .page-header {
-    flex-direction: column;
-    align-items: stretch;
+    align-items: flex-start;
   }
 
   .header-controls {
@@ -471,8 +482,13 @@ body {
     overscroll-behavior-x: contain;
   }
 
-  .day-picker {
-    max-width: 220px;
+  .header-copy {
+    min-width: 0;
+    padding-right: 4px;
+  }
+
+  .page-title {
+    gap: 8px;
   }
 
   .cell {
