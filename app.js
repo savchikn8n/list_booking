@@ -86,6 +86,7 @@ let transferModeActive = false;
 let draggedBookingId = null;
 let suppressNextCellClick = false;
 let bookingsChannel = null;
+let lastRealtimeEventAt = null;
 
 function createBookingDatabaseClient() {
   const url = SUPABASE_SETTINGS.url?.trim() || '';
@@ -109,7 +110,11 @@ function createBookingDatabaseClient() {
 }
 
 function setSyncStatus(text, state) {
-  syncStatus.textContent = text;
+  const lastEventLabel = lastRealtimeEventAt
+    ? ` | event ${lastRealtimeEventAt.toLocaleTimeString('ru-RU', { hour12: false })}`
+    : '';
+
+  syncStatus.textContent = `${text}${lastEventLabel}`;
   syncStatus.classList.remove('is-waiting', 'is-live', 'is-error');
   syncStatus.classList.add(`is-${state}`);
 }
@@ -327,6 +332,9 @@ async function deleteBookingFromDatabase(booking) {
 }
 
 function applyRealtimePayload(payload) {
+  lastRealtimeEventAt = new Date();
+  console.info('Supabase realtime payload:', payload);
+
   if (payload.eventType === 'DELETE') {
     const bookingId = payload.old?.id;
     const bookingDate = payload.old?.booking_date || null;
@@ -343,10 +351,14 @@ function applyRealtimePayload(payload) {
   }
 
   paintBookings();
+  setSyncStatus('Онлайн', 'live');
 }
 
 function subscribeToBookingChanges() {
   if (!bookingDatabase || bookingsChannel) return;
+
+  setSyncStatus('Подключение realtime...', 'waiting');
+  console.info('Supabase realtime subscribe start:', BOOKINGS_TABLE);
 
   bookingsChannel = bookingDatabase
     .channel('booking-sheet-bookings')
@@ -355,9 +367,11 @@ function subscribeToBookingChanges() {
       { event: '*', schema: 'public', table: BOOKINGS_TABLE },
       applyRealtimePayload
     )
-    .subscribe((status) => {
+    .subscribe((status, error) => {
+      console.info('Supabase realtime status:', status, error || '');
+
       if (status === 'SUBSCRIBED') {
-        setSyncStatus('Онлайн', 'live');
+        setSyncStatus('Realtime подключен', 'live');
       }
 
       if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
@@ -367,8 +381,8 @@ function subscribeToBookingChanges() {
 }
 
 async function bootstrapBookingsSync() {
-  await loadBookingsFromDatabase();
   subscribeToBookingChanges();
+  await loadBookingsFromDatabase();
 }
 
 function applyTheme(themeName) {
