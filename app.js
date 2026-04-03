@@ -27,6 +27,11 @@ const START_MINUTES = 12 * 60;
 const END_MINUTES = 24 * 60;
 const STEP_MINUTES = 30;
 const MIN_DURATION_SLOTS = 4;
+const MOBILE_BOARD_BREAKPOINT = 900;
+const MOBILE_TIME_COLUMN_WIDTH = 64;
+const MOBILE_TABLE_COLUMN_WIDTH = 92;
+const MOBILE_HEADER_ROW_HEIGHT = 44;
+const MOBILE_SLOT_ROW_HEIGHT = 28;
 const KALININGRAD_TIMEZONE = 'Europe/Kaliningrad';
 
 const board = document.getElementById('booking-board');
@@ -401,6 +406,27 @@ function fitBoardToViewport() {
   const wrapRect = board.parentElement.getBoundingClientRect();
   const fullWidth = Math.max(wrapRect.width, 320);
   const fullHeight = Math.max(wrapRect.height, 320);
+  const isMobileLayout = window.innerWidth <= MOBILE_BOARD_BREAKPOINT;
+
+  if (isMobileLayout) {
+    const totalBoardWidth = MOBILE_TIME_COLUMN_WIDTH + MOBILE_TABLE_COLUMN_WIDTH * TABLES.length;
+    const slotRowHeight = clamp(
+      Math.floor((fullHeight - MOBILE_HEADER_ROW_HEIGHT) / timeSlots.length),
+      14,
+      MOBILE_SLOT_ROW_HEIGHT
+    );
+    const usedMobileHeight = MOBILE_HEADER_ROW_HEIGHT + slotRowHeight * timeSlots.length;
+    const lastMobileSlotRowHeight = slotRowHeight + Math.max(0, Math.floor(fullHeight - usedMobileHeight));
+
+    board.style.width = `${totalBoardWidth}px`;
+    board.style.height = '100%';
+    board.style.gridTemplateColumns = `${MOBILE_TIME_COLUMN_WIDTH}px repeat(${TABLES.length}, ${MOBILE_TABLE_COLUMN_WIDTH}px)`;
+    board.style.gridTemplateRows = `${MOBILE_HEADER_ROW_HEIGHT}px repeat(${timeSlots.length - 1}, ${slotRowHeight}px) ${lastMobileSlotRowHeight}px`;
+    return;
+  }
+
+  board.style.width = '100%';
+  board.style.height = '100%';
 
   const firstColumnWidth = clamp(Math.floor(fullWidth * 0.07), 52, 86);
   const baseTableColumnWidth = clamp(
@@ -454,9 +480,11 @@ function updateNowIndicatorPosition() {
   const ratio = (nowMinutes - START_MINUTES) / (END_MINUTES - START_MINUTES);
   const y = slotsTop + slotsHeight * ratio;
   const tableStartX = firstSlotCell.offsetLeft;
-  const tableWidth = board.clientWidth - tableStartX;
+  const indicatorWidth = board.scrollWidth;
+  const tableWidth = indicatorWidth - tableStartX;
 
   nowIndicator.classList.remove('hidden');
+  nowIndicator.style.width = `${indicatorWidth}px`;
   nowIndicator.style.top = `${y}px`;
 
   nowBeacon.style.left = '0';
