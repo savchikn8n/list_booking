@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Лист броней</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="page-header">
+        <div class="header-copy">
+          <h1>Интерактивный лист броней</h1>
+          <p>Нажми на ячейку, чтобы добавить бронь (минимум 2 часа).</p>
+        </div>
+
+        <div class="header-controls">
+          <div class="palette" aria-label="Палитра бронирования">
+            <button type="button" class="palette-btn active" data-theme="yellow" aria-label="Желтый"></button>
+            <button type="button" class="palette-btn" data-theme="blue" aria-label="Синий"></button>
+            <button type="button" class="palette-btn" data-theme="purple" aria-label="Фиолетовый"></button>
+            <button type="button" class="palette-btn" data-theme="green" aria-label="Зеленый"></button>
+          </div>
+
+          <label class="day-picker" for="booking-date">
+            День
+            <input id="booking-date" name="booking-date" type="date" />
+          </label>
+        </div>
+      </header>
+
+      <main class="board-wrap">
+        <div id="booking-board" class="booking-board" aria-label="Таблица бронирования"></div>
+        <div id="now-indicator" class="now-indicator hidden" aria-hidden="true">
+          <div id="now-beacon" class="now-beacon"></div>
+          <div id="now-line" class="now-line"></div>
+        </div>
+      </main>
+    </div>
+
+    <dialog id="booking-modal" class="booking-modal">
+      <form id="booking-form" method="dialog" class="modal-content">
+        <h2 id="modal-title">Новая бронь</h2>
+
+        <label class="field">
+          Имя гостя
+          <input id="guest-name" name="name" type="text" required maxlength="60" />
+        </label>
+
+        <label class="field">
+          Телефон
+          <input
+            id="guest-phone"
+            name="phone"
+            type="tel"
+            required
+            maxlength="20"
+            placeholder="+7..."
+          />
+        </label>
+
+        <label class="field">
+          Комментарий
+          <textarea id="guest-comment" name="comment" rows="3" maxlength="240"></textarea>
+        </label>
+
+        <div class="field">
+          <span>Кол-во гостей</span>
+          <div class="counter" role="group" aria-label="Количество гостей">
+            <button type="button" id="guests-minus" class="counter-btn">-</button>
+            <output id="guests-count" for="guests-minus guests-plus">1</output>
+            <button type="button" id="guests-plus" class="counter-btn">+</button>
+          </div>
+        </div>
+
+        <label class="field">
+          Время начала
+          <select id="start-time" name="start-time"></select>
+        </label>
+
+        <div class="field">
+          <span>Длительность</span>
+          <div class="counter" role="group" aria-label="Длительность брони в минутах">
+            <button type="button" id="duration-minus" class="counter-btn">-</button>
+            <output id="duration-count" for="duration-minus duration-plus">2ч</output>
+            <button type="button" id="duration-plus" class="counter-btn">+</button>
+          </div>
+        </div>
+
+        <div id="transfer-box" class="transfer-box hidden">
+          <label class="field" for="transfer-table">
+            Новый стол
+            <select id="transfer-table"></select>
+          </label>
+          <button id="transfer-confirm" type="button" class="ghost">Подтвердить перенос</button>
+        </div>
+
+        <p id="selected-slot" class="selected-slot"></p>
+
+        <menu class="modal-actions">
+          <button id="delete-btn" type="button" class="danger hidden">Корзина</button>
+          <button id="transfer-btn" type="button" class="ghost hidden">Перенести</button>
+          <button id="cancel-btn" type="button" class="ghost">Отмена</button>
+          <button id="save-btn" type="submit" class="primary" value="default">Сохранить бронь</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
