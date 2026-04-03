@@ -37,7 +37,6 @@ const modal = document.getElementById('booking-modal');
 const form = document.getElementById('booking-form');
 const modalTitle = document.getElementById('modal-title');
 const selectedSlotText = document.getElementById('selected-slot');
-const syncStatus = document.getElementById('sync-status');
 
 const cancelBtn = document.getElementById('cancel-btn');
 const saveBtn = document.getElementById('save-btn');
@@ -70,9 +69,6 @@ for (let minutes = START_MINUTES; minutes <= END_MINUTES; minutes += STEP_MINUTE
 }
 
 const bookingsByDate = new Map();
-const SUPABASE_SETTINGS = window.BOOKING_SUPABASE_CONFIG || {};
-const BOOKINGS_TABLE = SUPABASE_SETTINGS.bookingsTable || 'booking_sheet_bookings';
-const bookingDatabase = createBookingDatabaseClient();
 
 let selectedDate = getLocalISODate();
 let currentTheme = 'yellow';
@@ -83,36 +79,6 @@ let activeSlot = null;
 let guestCount = 1;
 let durationSlots = MIN_DURATION_SLOTS;
 let transferModeActive = false;
-let draggedBookingId = null;
-let suppressNextCellClick = false;
-let bookingsChannel = null;
-
-function createBookingDatabaseClient() {
-  const url = SUPABASE_SETTINGS.url?.trim() || '';
-  const anonKey = SUPABASE_SETTINGS.anonKey?.trim() || '';
-  const hasConfig =
-    url.startsWith('https://') &&
-    anonKey.length > 20 &&
-    !url.includes('YOUR_PROJECT_ID') &&
-    !anonKey.includes('YOUR_SUPABASE_ANON_KEY');
-
-  if (!hasConfig || typeof window.supabase?.createClient !== 'function') {
-    return null;
-  }
-
-  return window.supabase.createClient(url, anonKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false
-    }
-  });
-}
-
-function setSyncStatus(text, state) {
-  syncStatus.textContent = text;
-  syncStatus.classList.remove('is-waiting', 'is-live', 'is-error');
-  syncStatus.classList.add(`is-${state}`);
-}
 
 function getLocalISODate(date = new Date()) {
   const year = date.getFullYear();
@@ -183,192 +149,6 @@ function getBookingsForSelectedDate() {
     bookingsByDate.set(selectedDate, new Map());
   }
   return bookingsByDate.get(selectedDate);
-}
-
-function getBookingsForDate(bookingDate) {
-  if (!bookingsByDate.has(bookingDate)) {
-    bookingsByDate.set(bookingDate, new Map());
-  }
-  return bookingsByDate.get(bookingDate);
-}
-
-function cacheBooking(booking) {
-  getBookingsForDate(booking.date).set(booking.id, booking);
-}
-
-function removeBookingFromCache(bookingId, bookingDate = null) {
-  if (bookingDate && bookingsByDate.has(bookingDate)) {
-    bookingsByDate.get(bookingDate).delete(bookingId);
-    return;
-  }
-
-  bookingsByDate.forEach((dayBookings) => {
-    dayBookings.delete(bookingId);
-  });
-}
-
-function normalizeBookingRow(row) {
-  if (!row?.id) return null;
-
-  return {
-    id: row.id,
-    tableIndex: Number(row.table_index),
-    timeIndex: Number(row.time_index),
-    startMinutes: Number(row.start_minutes),
-    durationSlots: Number(row.duration_slots),
-    name: row.guest_name || '',
-    phone: row.guest_phone || '',
-    comment: row.guest_comment || '',
-    guests: Number(row.guests) || 1,
-    date: row.booking_date,
-    colorTheme: row.color_theme || 'yellow'
-  };
-}
-
-function serializeBookingForDatabase(booking) {
-  return {
-    id: booking.id,
-    booking_date: booking.date,
-    table_index: booking.tableIndex,
-    time_index: booking.timeIndex,
-    start_minutes: booking.startMinutes,
-    duration_slots: booking.durationSlots,
-    guest_name: booking.name,
-    guest_phone: booking.phone,
-    guest_comment: booking.comment,
-    guests: booking.guests,
-    color_theme: booking.colorTheme
-  };
-}
-
-async function loadBookingsFromDatabase() {
-  if (!bookingDatabase) {
-    setSyncStatus('Supabase не настроен', 'error');
-    paintBookings();
-    return;
-  }
-
-  setSyncStatus('Загрузка броней...', 'waiting');
-
-  const { data, error } = await bookingDatabase
-    .from(BOOKINGS_TABLE)
-    .select(
-      'id, booking_date, table_index, time_index, start_minutes, duration_slots, guest_name, guest_phone, guest_comment, guests, color_theme'
-    )
-    .order('booking_date', { ascending: true })
-    .order('table_index', { ascending: true })
-    .order('time_index', { ascending: true });
-
-  if (error) {
-    console.error('Supabase load error:', error);
-    setSyncStatus('Ошибка загрузки', 'error');
-    return;
-  }
-
-  bookingsByDate.clear();
-  (data || []).forEach((row) => {
-    const booking = normalizeBookingRow(row);
-    if (booking) cacheBooking(booking);
-  });
-
-  paintBookings();
-  setSyncStatus('Онлайн', 'live');
-}
-
-async function saveBookingToDatabase(booking) {
-  if (!bookingDatabase) {
-    removeBookingFromCache(booking.id);
-    cacheBooking(booking);
-    paintBookings();
-    setSyncStatus('Локальный режим', 'error');
-    return true;
-  }
-
-  const { error } = await bookingDatabase
-    .from(BOOKINGS_TABLE)
-    .upsert(serializeBookingForDatabase(booking), { onConflict: 'id' });
-
-  if (error) {
-    console.error('Supabase save error:', error);
-    setSyncStatus('Ошибка сохранения', 'error');
-    selectedSlotText.textContent =
-      'Не удалось сохранить бронь в Supabase. Проверь таблицу, RLS и realtime-настройки.';
-    return false;
-  }
-
-  removeBookingFromCache(booking.id);
-  cacheBooking(booking);
-  paintBookings();
-  setSyncStatus('Онлайн', 'live');
-  return true;
-}
-
-async function deleteBookingFromDatabase(booking) {
-  if (!bookingDatabase) {
-    removeBookingFromCache(booking.id, booking.date);
-    paintBookings();
-    setSyncStatus('Локальный режим', 'error');
-    return true;
-  }
-
-  const { error } = await bookingDatabase.from(BOOKINGS_TABLE).delete().eq('id', booking.id);
-
-  if (error) {
-    console.error('Supabase delete error:', error);
-    setSyncStatus('Ошибка удаления', 'error');
-    selectedSlotText.textContent = 'Не удалось удалить бронь из Supabase.';
-    return false;
-  }
-
-  removeBookingFromCache(booking.id, booking.date);
-  paintBookings();
-  setSyncStatus('Онлайн', 'live');
-  return true;
-}
-
-function applyRealtimePayload(payload) {
-  if (payload.eventType === 'DELETE') {
-    const bookingId = payload.old?.id;
-    const bookingDate = payload.old?.booking_date || null;
-    if (bookingId) {
-      removeBookingFromCache(bookingId, bookingDate);
-
-      if (editingBookingId === bookingId && modal.open) {
-        closeModalAndReset();
-      }
-    }
-  } else {
-    const booking = normalizeBookingRow(payload.new);
-    if (booking) cacheBooking(booking);
-  }
-
-  paintBookings();
-}
-
-function subscribeToBookingChanges() {
-  if (!bookingDatabase || bookingsChannel) return;
-
-  bookingsChannel = bookingDatabase
-    .channel('booking-sheet-bookings')
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: BOOKINGS_TABLE },
-      applyRealtimePayload
-    )
-    .subscribe((status) => {
-      if (status === 'SUBSCRIBED') {
-        setSyncStatus('Онлайн', 'live');
-      }
-
-      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-        setSyncStatus('Realtime недоступен', 'error');
-      }
-    });
-}
-
-async function bootstrapBookingsSync() {
-  await loadBookingsFromDatabase();
-  subscribeToBookingChanges();
 }
 
 function applyTheme(themeName) {
@@ -541,11 +321,6 @@ function openViewModal(booking) {
 }
 
 function onCellClick(event) {
-  if (suppressNextCellClick) {
-    suppressNextCellClick = false;
-    return;
-  }
-
   const cell = event.currentTarget;
 
   if (cell.dataset.bookingId) {
@@ -560,96 +335,6 @@ function onCellClick(event) {
     tableIndex: Number(cell.dataset.tableIndex),
     timeIndex: Number(cell.dataset.timeIndex)
   });
-}
-
-function clearDropHints() {
-  document.querySelectorAll('.slot-cell.drop-allowed, .slot-cell.drop-denied').forEach((cell) => {
-    cell.classList.remove('drop-allowed', 'drop-denied');
-  });
-}
-
-function onCellDragStart(event) {
-  const cell = event.currentTarget;
-  const bookingId = cell.dataset.bookingId;
-  if (!bookingId) {
-    event.preventDefault();
-    return;
-  }
-
-  draggedBookingId = bookingId;
-  cell.classList.add('dragging');
-
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', bookingId);
-  }
-}
-
-function onCellDragEnd() {
-  draggedBookingId = null;
-  clearDropHints();
-  document.querySelectorAll('.slot-cell.dragging').forEach((cell) => cell.classList.remove('dragging'));
-}
-
-function onCellDragOver(event) {
-  const cell = event.currentTarget;
-  if (!draggedBookingId) return;
-
-  const booking = getBookingsForSelectedDate().get(draggedBookingId);
-  if (!booking) return;
-
-  event.preventDefault();
-  const targetTableIndex = Number(cell.dataset.tableIndex);
-  const targetTimeIndex = Number(cell.dataset.timeIndex);
-  const canDrop = isTimeRangeFree(
-    targetTableIndex,
-    targetTimeIndex,
-    booking.durationSlots,
-    draggedBookingId
-  );
-
-  clearDropHints();
-  cell.classList.add(canDrop ? 'drop-allowed' : 'drop-denied');
-
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = canDrop ? 'move' : 'none';
-  }
-}
-
-async function onCellDrop(event) {
-  const cell = event.currentTarget;
-  if (!draggedBookingId) return;
-
-  event.preventDefault();
-  clearDropHints();
-
-  const bookings = getBookingsForSelectedDate();
-  const booking = bookings.get(draggedBookingId);
-  if (!booking) return;
-
-  const targetTableIndex = Number(cell.dataset.tableIndex);
-  const targetTimeIndex = Number(cell.dataset.timeIndex);
-
-  if (
-    !isTimeRangeFree(targetTableIndex, targetTimeIndex, booking.durationSlots, draggedBookingId)
-  ) {
-    return;
-  }
-
-  const movedBooking = {
-    ...booking,
-    tableIndex: targetTableIndex,
-    timeIndex: targetTimeIndex,
-    startMinutes: timeSlots[targetTimeIndex]
-  };
-
-  // Prevent accidental click-open right after mouse release from drag.
-  suppressNextCellClick = true;
-  setTimeout(() => {
-    suppressNextCellClick = false;
-  }, 0);
-
-  await saveBookingToDatabase(movedBooking);
 }
 
 function renderGrid() {
@@ -680,16 +365,11 @@ function renderGrid() {
       const cell = document.createElement('button');
       cell.type = 'button';
       cell.className = 'cell slot-cell';
-      cell.draggable = false;
       if (tableIndex === TABLES.length - 1) cell.classList.add('last-col');
       if (rowIndex === timeSlots.length - 1) cell.classList.add('last-row');
       cell.dataset.tableIndex = String(tableIndex);
       cell.dataset.timeIndex = String(rowIndex);
       cell.addEventListener('click', onCellClick);
-      cell.addEventListener('dragstart', onCellDragStart);
-      cell.addEventListener('dragend', onCellDragEnd);
-      cell.addEventListener('dragover', onCellDragOver);
-      cell.addEventListener('drop', onCellDrop);
       board.appendChild(cell);
     });
   });
@@ -722,10 +402,9 @@ function isTimeRangeFree(tableIndex, startTimeIndex, slotsCount, ignoreBookingId
 
 function paintBookings() {
   document.querySelectorAll('.slot-cell').forEach((cell) => {
-    cell.classList.remove('booked', 'booked-top', 'booked-bottom', 'dragging');
+    cell.classList.remove('booked', 'booked-top', 'booked-bottom');
     cell.textContent = '';
     cell.removeAttribute('title');
-    cell.draggable = false;
     delete cell.dataset.bookingId;
   });
 
@@ -737,9 +416,8 @@ function paintBookings() {
       );
       if (!cell) continue;
 
-        cell.classList.add('booked');
-        cell.dataset.bookingId = booking.id;
-        cell.draggable = true;
+      cell.classList.add('booked');
+      cell.dataset.bookingId = booking.id;
 
       if (i === 0) {
         cell.classList.add('booked-top');
@@ -853,14 +531,12 @@ function initEvents() {
 
   cancelBtn.addEventListener('click', closeModalAndReset);
 
-  deleteBtn.addEventListener('click', async () => {
+  deleteBtn.addEventListener('click', () => {
     if (modalMode !== 'view' || !editingBookingId) return;
 
-    const booking = getBookingsForSelectedDate().get(editingBookingId);
-    if (!booking) return;
-
-    const deleted = await deleteBookingFromDatabase(booking);
-    if (deleted) closeModalAndReset();
+    getBookingsForSelectedDate().delete(editingBookingId);
+    paintBookings();
+    closeModalAndReset();
   });
 
   transferBtn.addEventListener('click', () => {
@@ -898,7 +574,7 @@ function initEvents() {
     updateSlotInfo();
   });
 
-  transferConfirmBtn.addEventListener('click', async () => {
+  transferConfirmBtn.addEventListener('click', () => {
     if (modalMode !== 'view' || !editingBookingId) return;
 
     const bookings = getBookingsForSelectedDate();
@@ -928,11 +604,12 @@ function initEvents() {
       durationSlots
     };
 
-    const saved = await saveBookingToDatabase(transferred);
-    if (saved) closeModalAndReset();
+    bookings.set(transferred.id, transferred);
+    paintBookings();
+    closeModalAndReset();
   });
 
-  form.addEventListener('submit', async (event) => {
+  form.addEventListener('submit', (event) => {
     event.preventDefault();
 
     const name = guestNameInput.value.trim();
@@ -952,8 +629,9 @@ function initEvents() {
       }
 
       const booking = createBookingPayload(activeSlot.tableIndex, startTimeIndex, durationSlots);
-      const saved = await saveBookingToDatabase(booking);
-      if (saved) closeModalAndReset();
+      bookings.set(booking.id, booking);
+      paintBookings();
+      closeModalAndReset();
       return;
     }
 
@@ -972,8 +650,9 @@ function initEvents() {
         durationSlots,
         editingBookingId
       );
-      const saved = await saveBookingToDatabase(updated);
-      if (saved) closeModalAndReset();
+      bookings.set(updated.id, updated);
+      paintBookings();
+      closeModalAndReset();
     }
   });
 
@@ -1005,4 +684,3 @@ function initEvents() {
 populateTimeSelect();
 renderGrid();
 initEvents();
-void bootstrapBookingsSync();
