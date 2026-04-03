@@ -1,19 +1,19 @@
 const TABLES = [
-  { label: '1(6) PS5', ps5: true },
-  { label: '2(5)', ps5: false },
-  { label: '3(8) PS4', ps5: false },
-  { label: '4(8) PS5', ps5: true },
-  { label: '5(4)', ps5: false },
-  { label: '6(6)', ps5: false },
-  { label: '7(5)', ps5: false },
-  { label: '8(5)', ps5: false },
-  { label: '9(4)', ps5: false },
-  { label: '10(2)', ps5: false },
-  { label: '11(8)', ps5: false },
-  { label: '12(3)', ps5: false },
-  { label: '13(4)', ps5: false },
-  { label: '14(6) PS5', ps5: true },
-  { label: '15(4)', ps5: false }
+  { label: '1 PS5', ps5: true },
+  { label: '2', ps5: false },
+  { label: '3', ps5: false },
+  { label: '4', ps5: false },
+  { label: '5', ps5: false },
+  { label: '6', ps5: false },
+  { label: '7', ps5: false },
+  { label: '8', ps5: false },
+  { label: '9', ps5: false },
+  { label: '10', ps5: false },
+  { label: '11 PS5', ps5: true },
+  { label: '12 PS5', ps5: true },
+  { label: '13', ps5: false },
+  { label: '14', ps5: false },
+  { label: '15', ps5: false }
 ];
 
 const THEMES = {
@@ -31,7 +31,7 @@ const MOBILE_BOARD_BREAKPOINT = 900;
 const MOBILE_TIME_COLUMN_WIDTH = 64;
 const MOBILE_TABLE_COLUMN_WIDTH = 92;
 const MOBILE_HEADER_ROW_HEIGHT = 44;
-const MOBILE_SLOT_ROW_HEIGHT = 34;
+const MOBILE_SLOT_ROW_HEIGHT = 42;
 const KALININGRAD_TIMEZONE = 'Europe/Kaliningrad';
 
 const board = document.getElementById('booking-board');
