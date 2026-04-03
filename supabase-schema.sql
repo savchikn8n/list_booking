@@ -8,7 +8,7 @@ create table if not exists public.booking_sheet_bookings (
   start_minutes smallint not null check (start_minutes between 720 and 1440),
   duration_slots smallint not null check (duration_slots >= 1),
   guest_name text not null check (char_length(trim(guest_name)) between 1 and 60),
-  guest_phone text not null check (char_length(trim(guest_phone)) between 1 and 20),
+  guest_phone text not null default '' check (char_length(trim(guest_phone)) between 0 and 20),
   guest_comment text not null default '' check (char_length(guest_comment) <= 240),
   guests smallint not null check (guests >= 1),
   color_theme text not null default 'yellow' check (
@@ -26,6 +26,13 @@ create index if not exists booking_sheet_bookings_date_table_idx
 
 do $$
 begin
+  alter table public.booking_sheet_bookings
+    drop constraint if exists booking_sheet_bookings_guest_phone_check;
+
+  alter table public.booking_sheet_bookings
+    add constraint booking_sheet_bookings_guest_phone_check
+    check (char_length(trim(guest_phone)) between 0 and 20);
+
   if not exists (
     select 1
     from pg_constraint

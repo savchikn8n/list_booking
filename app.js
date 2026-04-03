@@ -792,11 +792,14 @@ function paintBookings() {
         text.className = 'booking-text';
         text.textContent = `${booking.name} (${booking.guests})`;
 
-        const note = document.createElement('span');
-        note.className = 'booking-note';
-        note.textContent = booking.phone;
+        cell.append(text);
 
-        cell.append(text, note);
+        if (booking.phone) {
+          const note = document.createElement('span');
+          note.className = 'booking-note';
+          note.textContent = booking.phone;
+          cell.append(note);
+        }
       }
 
       if (i === booking.durationSlots - 1) {
@@ -804,7 +807,8 @@ function paintBookings() {
       }
 
       const endMinutes = booking.startMinutes + booking.durationSlots * STEP_MINUTES;
-      cell.title = `${booking.name}\n${booking.phone}\nГостей: ${booking.guests}\nКомментарий: ${booking.comment || '-'}\n${minutesToLabel(booking.startMinutes)}-${minutesToLabel(endMinutes)}`;
+      const phoneLine = booking.phone ? `${booking.phone}\n` : '';
+      cell.title = `${booking.name}\n${phoneLine}Гостей: ${booking.guests}\nКомментарий: ${booking.comment || '-'}\n${minutesToLabel(booking.startMinutes)}-${minutesToLabel(endMinutes)}`;
     }
   }
 }
@@ -980,10 +984,9 @@ function initEvents() {
     event.preventDefault();
 
     const name = guestNameInput.value.trim();
-    const phone = guestPhoneInput.value.trim();
     const startTimeIndex = getStartTimeIndex();
 
-    if (!name || !phone) return;
+    if (!name) return;
 
     const bookings = getBookingsForSelectedDate();
 
