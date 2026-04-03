@@ -4,8 +4,8 @@ create table if not exists public.booking_sheet_bookings (
   id uuid primary key,
   booking_date date not null,
   table_index smallint not null check (table_index between 0 and 14),
-  time_index smallint not null check (time_index between 0 and 24),
-  start_minutes smallint not null check (start_minutes between 720 and 1440),
+  time_index smallint not null check (time_index between 0 and 28),
+  start_minutes smallint not null check (start_minutes between 720 and 1560),
   duration_slots smallint not null check (duration_slots >= 1),
   guest_name text not null check (char_length(trim(guest_name)) between 1 and 60),
   guest_phone text not null default '' check (char_length(trim(guest_phone)) between 0 and 20),
@@ -30,8 +30,22 @@ begin
     drop constraint if exists booking_sheet_bookings_guest_phone_check;
 
   alter table public.booking_sheet_bookings
+    drop constraint if exists booking_sheet_bookings_time_index_check;
+
+  alter table public.booking_sheet_bookings
+    drop constraint if exists booking_sheet_bookings_start_minutes_check;
+
+  alter table public.booking_sheet_bookings
     add constraint booking_sheet_bookings_guest_phone_check
     check (char_length(trim(guest_phone)) between 0 and 20);
+
+  alter table public.booking_sheet_bookings
+    add constraint booking_sheet_bookings_time_index_check
+    check (time_index between 0 and 28);
+
+  alter table public.booking_sheet_bookings
+    add constraint booking_sheet_bookings_start_minutes_check
+    check (start_minutes between 720 and 1560);
 
   if not exists (
     select 1

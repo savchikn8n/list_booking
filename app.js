@@ -24,7 +24,8 @@ const THEMES = {
 };
 
 const START_MINUTES = 12 * 60;
-const END_MINUTES = 24 * 60;
+const REGULAR_END_MINUTES = 25 * 60;
+const WEEKEND_END_MINUTES = 26 * 60;
 const STEP_MINUTES = 30;
 const MIN_DURATION_SLOTS = 4;
 const MOBILE_BOARD_BREAKPOINT = 900;
@@ -69,17 +70,14 @@ const durationCountOutput = document.getElementById('duration-count');
 
 const paletteButtons = Array.from(document.querySelectorAll('.palette-btn'));
 
-const timeSlots = [];
-for (let minutes = START_MINUTES; minutes <= END_MINUTES; minutes += STEP_MINUTES) {
-  timeSlots.push(minutes);
-}
-
 const bookingsByDate = new Map();
 const SUPABASE_SETTINGS = window.BOOKING_SUPABASE_CONFIG || {};
 const BOOKINGS_TABLE = SUPABASE_SETTINGS.bookingsTable || 'booking_sheet_bookings';
 const bookingDatabase = createBookingDatabaseClient();
 
 let selectedDate = getLocalISODate();
+let scheduleEndMinutes = getScheduleEndMinutes(selectedDate);
+let timeSlots = buildTimeSlots(scheduleEndMinutes);
 let currentTheme = 'yellow';
 
 let modalMode = 'create';
@@ -133,6 +131,29 @@ function getLocalISODate(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+function getDateObjectFromISO(dateISO) {
+  const [year, month, day] = dateISO.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function getScheduleEndMinutes(dateISO) {
+  const dayOfWeek = getDateObjectFromISO(dateISO).getDay();
+  return dayOfWeek === 5 || dayOfWeek === 6 ? WEEKEND_END_MINUTES : REGULAR_END_MINUTES;
+}
+
+function buildTimeSlots(endMinutesLimit) {
+  const slots = [];
+  for (let minutes = START_MINUTES; minutes <= endMinutesLimit; minutes += STEP_MINUTES) {
+    slots.push(minutes);
+  }
+  return slots;
+}
+
+function syncScheduleForSelectedDate() {
+  scheduleEndMinutes = getScheduleEndMinutes(selectedDate);
+  timeSlots = buildTimeSlots(scheduleEndMinutes);
+}
+
 function getKaliningradMinutesNow() {
   const parts = new Intl.DateTimeFormat('ru-RU', {
     hour: '2-digit',
@@ -153,6 +174,42 @@ function getKaliningradTimeLabel() {
     hour12: false,
     timeZone: KALININGRAD_TIMEZONE
   }).format(new Date());
+}
+
+function getKaliningradBusinessTimelinePosition() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: KALININGRAD_TIMEZONE
+  }).formatToParts(new Date());
+
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? '0');
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value ?? '0');
+  const todayISO = `${year}-${month}-${day}`;
+  const nowMinutes = hour * 60 + minute;
+
+  if (selectedDate === todayISO) {
+    return nowMinutes;
+  }
+
+  const tomorrowDate = getDateObjectFromISO(selectedDate);
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+
+  if (
+    getLocalISODate(tomorrowDate) === todayISO &&
+    nowMinutes < scheduleEndMinutes - 24 * 60
+  ) {
+    return nowMinutes + 24 * 60;
+  }
+
+  return null;
 }
 
 function clamp(value, min, max) {
@@ -179,11 +236,16 @@ function getStartTimeIndex() {
 function getMaxSlotsFromStart(startTimeIndex) {
   const startMinutes = timeSlots[startTimeIndex];
   if (Number.isNaN(startMinutes)) return 0;
-  return Math.floor((END_MINUTES - startMinutes) / STEP_MINUTES);
+  return Math.floor((scheduleEndMinutes - startMinutes) / STEP_MINUTES);
 }
 
-function getMinDurationSlots() {
-  return transferModeActive ? 1 : MIN_DURATION_SLOTS;
+function getMinDurationSlots(startTimeIndex = getStartTimeIndex()) {
+  if (transferModeActive) return 1;
+
+  const maxSlots = getMaxSlotsFromStart(startTimeIndex);
+  if (maxSlots < 1) return 0;
+
+  return Math.min(MIN_DURATION_SLOTS, maxSlots);
 }
 
 function setCounter(output, value) {
@@ -466,12 +528,12 @@ function updateNowIndicatorPosition() {
     return;
   }
 
-  const nowMinutes = getKaliningradMinutesNow();
+  const nowMinutes = getKaliningradBusinessTimelinePosition();
   const nowLabel = getKaliningradTimeLabel();
   nowBeacon.dataset.nowTime = `Сейчас: ${nowLabel}`;
   nowBeacon.title = `Калининград: ${nowLabel}`;
 
-  if (nowMinutes < START_MINUTES || nowMinutes > END_MINUTES) {
+  if (nowMinutes === null || nowMinutes < START_MINUTES || nowMinutes > scheduleEndMinutes) {
     nowIndicator.classList.add('hidden');
     return;
   }
@@ -479,7 +541,7 @@ function updateNowIndicatorPosition() {
   const slotsTop = firstSlotCell.offsetTop;
   const slotsBottom = lastSlotCell.offsetTop + lastSlotCell.offsetHeight;
   const slotsHeight = slotsBottom - slotsTop;
-  const ratio = (nowMinutes - START_MINUTES) / (END_MINUTES - START_MINUTES);
+  const ratio = (nowMinutes - START_MINUTES) / (scheduleEndMinutes - START_MINUTES);
   const y = slotsTop + slotsHeight * ratio;
   const tableStartX = firstSlotCell.offsetLeft;
   const indicatorWidth = board.scrollWidth;
@@ -498,7 +560,7 @@ function updateNowIndicatorPosition() {
 
 function populateTimeSelect() {
   startTimeSelect.innerHTML = '';
-  timeSlots.forEach((minutes, index) => {
+  timeSlots.slice(0, -1).forEach((minutes, index) => {
     const option = document.createElement('option');
     option.value = String(index);
     option.textContent = minutesToLabel(minutes);
@@ -544,6 +606,9 @@ function setModalMode(mode) {
 }
 
 function openCreateModal(slot) {
+  const maxSlots = getMaxSlotsFromStart(slot.timeIndex);
+  if (maxSlots < 1) return;
+
   setModalMode('create');
   editingBookingId = null;
   activeSlot = slot;
@@ -554,7 +619,7 @@ function openCreateModal(slot) {
   guestPhoneInput.value = '';
   guestCommentInput.value = '';
   guestCount = 1;
-  durationSlots = MIN_DURATION_SLOTS;
+  durationSlots = getMinDurationSlots(slot.timeIndex);
 
   setCounter(guestsCountOutput, String(guestCount));
   startTimeSelect.value = String(slot.timeIndex);
@@ -838,7 +903,7 @@ function resetModalState() {
   editingBookingId = null;
   activeSlot = null;
   guestCount = 1;
-  durationSlots = MIN_DURATION_SLOTS;
+  durationSlots = getMinDurationSlots(0) || MIN_DURATION_SLOTS;
 
   guestNameInput.value = '';
   guestPhoneInput.value = '';
@@ -854,7 +919,9 @@ function initEvents() {
   bookingDateInput.value = selectedDate;
   bookingDateInput.addEventListener('change', () => {
     selectedDate = bookingDateInput.value || getLocalISODate();
-    paintBookings();
+    syncScheduleForSelectedDate();
+    populateTimeSelect();
+    renderGrid();
   });
 
   startTimeSelect.addEventListener('change', () => {
@@ -933,7 +1000,7 @@ function initEvents() {
     if (!currentBooking) return;
 
     const transferStartIndex = currentBooking.timeIndex + currentBooking.durationSlots;
-    if (transferStartIndex >= timeSlots.length) {
+    if (transferStartIndex >= timeSlots.length - 1) {
       transferModeActive = false;
       transferBox.classList.add('hidden');
       selectedSlotText.textContent = 'Перенос невозможен: текущая бронь заканчивается в конце рабочего дня.';
