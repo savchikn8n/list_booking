@@ -311,6 +311,20 @@ body {
   border-bottom: 0;
 }
 
+.time-cell.closing-row,
+.slot-cell.closing-row {
+  background: #6b6761;
+  color: #f4f1ec;
+}
+
+.slot-cell.closing-slot {
+  cursor: default;
+}
+
+.slot-cell.closing-slot:hover {
+  background: #6b6761;
+}
+
 .now-indicator {
   position: absolute;
   left: 0;

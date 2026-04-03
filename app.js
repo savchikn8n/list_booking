@@ -779,9 +779,10 @@ function renderGrid() {
   });
 
   timeSlots.forEach((minutes, rowIndex) => {
+    const isClosingRow = rowIndex === timeSlots.length - 1;
     const timeCell = document.createElement('div');
     timeCell.className = 'cell time-cell';
-    if (rowIndex === timeSlots.length - 1) timeCell.classList.add('last-row');
+    if (isClosingRow) timeCell.classList.add('last-row', 'closing-row');
     timeCell.textContent = minutesToLabel(minutes);
     board.appendChild(timeCell);
 
@@ -791,7 +792,10 @@ function renderGrid() {
       cell.className = 'cell slot-cell';
       cell.draggable = false;
       if (tableIndex === TABLES.length - 1) cell.classList.add('last-col');
-      if (rowIndex === timeSlots.length - 1) cell.classList.add('last-row');
+      if (isClosingRow) {
+        cell.classList.add('last-row', 'closing-row', 'closing-slot');
+        cell.disabled = true;
+      }
       cell.dataset.tableIndex = String(tableIndex);
       cell.dataset.timeIndex = String(rowIndex);
       cell.addEventListener('click', onCellClick);
