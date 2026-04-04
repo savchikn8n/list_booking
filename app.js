@@ -30,7 +30,7 @@ const WEEKEND_END_MINUTES = 26 * 60;
 const STEP_MINUTES = 30;
 const DEFAULT_DURATION_SLOTS = 4;
 const MIN_DURATION_SLOTS = 1;
-const MOBILE_BOARD_BREAKPOINT = 900;
+const MOBILE_BOARD_BREAKPOINT = 767;
 const MOBILE_TIME_COLUMN_WIDTH = 64;
 const MOBILE_TABLE_COLUMN_WIDTH = 92;
 const MOBILE_HEADER_ROW_HEIGHT = 44;
@@ -1077,13 +1077,9 @@ function paintBookings() {
       );
       if (!cell) continue;
 
-      const theme = THEMES[booking.colorTheme] || THEMES.yellow;
-
       cell.classList.add('booked');
       cell.dataset.bookingId = booking.id;
       cell.draggable = true;
-      cell.style.setProperty('--booking-accent', theme.accent);
-      cell.style.setProperty('--booking-accent-deep', theme.accentDeep);
 
       if (i === 0) {
         cell.classList.add('booked-top');

@@ -16,6 +16,8 @@
 html {
   width: 100%;
   overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
@@ -174,6 +176,7 @@ body {
   background: transparent;
   color: var(--text);
   font: inherit;
+  font-size: 16px;
   font-weight: 700;
   padding: 0 2px 2px;
   cursor: pointer;
@@ -234,7 +237,9 @@ body {
   border: 1px solid #b7aea1;
   border-radius: 8px;
   padding: 8px 10px;
-  font: inherit;
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1.35;
   background: #fff;
 }
 
@@ -335,18 +340,18 @@ body {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(175deg, color-mix(in srgb, var(--booking-accent, var(--accent)) 92%, white 8%), color-mix(in srgb, var(--booking-accent-deep, var(--accent-deep)) 84%, white 16%)),
+    linear-gradient(175deg, color-mix(in srgb, var(--accent) 92%, white 8%), color-mix(in srgb, var(--accent-deep) 84%, white 16%)),
     radial-gradient(circle at 18% 14%, rgba(255, 255, 255, 0.35), transparent 42%);
   pointer-events: none;
   z-index: 0;
 }
 
 .slot-cell.booked-top {
-  border-top: 1px solid color-mix(in srgb, var(--booking-accent-deep, var(--accent-deep)) 70%, #6a5642 30%);
+  border-top: 1px solid color-mix(in srgb, var(--accent-deep) 70%, #6a5642 30%);
 }
 
 .slot-cell.booked-bottom {
-  border-bottom: 1px solid color-mix(in srgb, var(--booking-accent-deep, var(--accent-deep)) 70%, #6a5642 30%);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent-deep) 70%, #6a5642 30%);
 }
 
 .booking-text,
@@ -357,6 +362,8 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--text);
+  text-decoration: none;
 }
 
 .booking-text {
@@ -630,19 +637,21 @@ body {
   cursor: pointer;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 767px) {
   .page-shell {
     padding: 8px;
   }
 
   .page-header {
-    align-items: flex-start;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr) 12px;
+    align-items: center;
+    gap: 8px;
+    padding-right: 0;
   }
 
   .header-controls {
-    flex-wrap: wrap;
-    justify-content: space-between;
+    display: none;
   }
 
   .palette {
@@ -658,7 +667,8 @@ body {
 
   .header-copy {
     min-width: 0;
-    padding-right: 4px;
+    padding-right: 0;
+    overflow: hidden;
   }
 
   .view-menu-trigger {
@@ -672,7 +682,26 @@ body {
   }
 
   .page-title {
-    gap: 8px;
+    flex-wrap: nowrap;
+    gap: 6px;
+    min-width: 0;
+    font-size: 1rem;
+    white-space: nowrap;
+  }
+
+  .page-title > span {
+    flex: 0 0 auto;
+  }
+
+  .title-date-input {
+    min-width: 0;
+    width: 126px;
+    font-size: 16px;
+  }
+
+  .sync-status {
+    position: static;
+    justify-self: end;
   }
 
   .cell {
