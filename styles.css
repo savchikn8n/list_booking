@@ -49,6 +49,74 @@ body {
   padding-right: 24px;
 }
 
+.view-switcher {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.view-menu {
+  position: relative;
+}
+
+.view-menu > summary {
+  list-style: none;
+}
+
+.view-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.view-menu-trigger {
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(95, 90, 83, 0.35);
+  border-radius: 10px;
+  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--text);
+}
+
+.view-menu[open] .view-menu-trigger {
+  background: var(--grid-head);
+}
+
+.view-menu-list {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+  z-index: 20;
+  min-width: 180px;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(95, 90, 83, 0.18);
+  background: #fff;
+  box-shadow: 0 18px 32px rgba(25, 20, 16, 0.14);
+  display: grid;
+  gap: 6px;
+}
+
+.view-menu-btn {
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 0.92rem;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.view-menu-btn.active {
+  background: color-mix(in srgb, var(--accent) 30%, white 70%);
+  font-weight: 700;
+}
+
 .page-title {
   margin: 0;
   display: flex;
@@ -267,18 +335,18 @@ body {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(175deg, color-mix(in srgb, var(--accent) 92%, white 8%), color-mix(in srgb, var(--accent-deep) 84%, white 16%)),
+    linear-gradient(175deg, color-mix(in srgb, var(--booking-accent, var(--accent)) 92%, white 8%), color-mix(in srgb, var(--booking-accent-deep, var(--accent-deep)) 84%, white 16%)),
     radial-gradient(circle at 18% 14%, rgba(255, 255, 255, 0.35), transparent 42%);
   pointer-events: none;
   z-index: 0;
 }
 
 .slot-cell.booked-top {
-  border-top: 1px solid color-mix(in srgb, var(--accent-deep) 70%, #6a5642 30%);
+  border-top: 1px solid color-mix(in srgb, var(--booking-accent-deep, var(--accent-deep)) 70%, #6a5642 30%);
 }
 
 .slot-cell.booked-bottom {
-  border-bottom: 1px solid color-mix(in srgb, var(--accent-deep) 70%, #6a5642 30%);
+  border-bottom: 1px solid color-mix(in srgb, var(--booking-accent-deep, var(--accent-deep)) 70%, #6a5642 30%);
 }
 
 .booking-text,
@@ -482,6 +550,86 @@ body {
   display: none !important;
 }
 
+.waitlist-view {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 12px;
+}
+
+.waitlist-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.3fr auto;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(95, 90, 83, 0.2);
+  border-radius: 16px;
+  background: var(--panel);
+}
+
+.waitlist-submit {
+  align-self: end;
+  border-radius: 10px;
+  border: 0;
+  padding: 12px 16px;
+  font: inherit;
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+
+.waitlist-items {
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid rgba(95, 90, 83, 0.2);
+  border-radius: 16px;
+  background: var(--panel);
+  padding: 8px;
+}
+
+.waitlist-empty {
+  padding: 18px 14px;
+  color: #6e655b;
+  font-size: 0.94rem;
+}
+
+.waitlist-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 10px;
+  border-bottom: 1px solid rgba(95, 90, 83, 0.12);
+}
+
+.waitlist-card:last-child {
+  border-bottom: 0;
+}
+
+.waitlist-name {
+  font-weight: 700;
+  font-size: 0.98rem;
+}
+
+.waitlist-phone,
+.waitlist-comment {
+  margin-top: 4px;
+  color: #5f564b;
+  font-size: 0.86rem;
+}
+
+.waitlist-delete-btn {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 10px;
+  background: #fbe3e3;
+  color: #6e1c1c;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 0.86rem;
+  cursor: pointer;
+}
+
 @media (max-width: 900px) {
   .page-shell {
     padding: 8px;
@@ -489,6 +637,7 @@ body {
 
   .page-header {
     align-items: flex-start;
+    gap: 10px;
   }
 
   .header-controls {
@@ -510,6 +659,16 @@ body {
   .header-copy {
     min-width: 0;
     padding-right: 4px;
+  }
+
+  .view-menu-trigger {
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+  }
+
+  .view-menu-list {
+    min-width: 176px;
   }
 
   .page-title {
@@ -574,5 +733,30 @@ body {
     min-height: 40px;
     padding: 10px 12px;
     font-size: 0.92rem;
+  }
+
+  .waitlist-view {
+    gap: 10px;
+  }
+
+  .waitlist-form {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 10px;
+    border-radius: 14px;
+  }
+
+  .waitlist-submit {
+    width: 100%;
+    padding: 11px 14px;
+    font-size: 0.9rem;
+  }
+
+  .waitlist-items {
+    border-radius: 14px;
+  }
+
+  .waitlist-card {
+    padding: 12px 8px;
   }
 }

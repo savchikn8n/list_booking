@@ -1,4 +1,5 @@
 const TABLES = [
+  { label: 'Бар', ps5: false },
   { label: '1 PS5', ps5: true },
   { label: '2', ps5: false },
   { label: '3', ps5: false },
@@ -27,7 +28,8 @@ const START_MINUTES = 12 * 60;
 const REGULAR_END_MINUTES = 25 * 60;
 const WEEKEND_END_MINUTES = 26 * 60;
 const STEP_MINUTES = 30;
-const MIN_DURATION_SLOTS = 4;
+const DEFAULT_DURATION_SLOTS = 4;
+const MIN_DURATION_SLOTS = 1;
 const MOBILE_BOARD_BREAKPOINT = 900;
 const MOBILE_TIME_COLUMN_WIDTH = 64;
 const MOBILE_TABLE_COLUMN_WIDTH = 92;
@@ -36,6 +38,12 @@ const MOBILE_SLOT_ROW_HEIGHT = 42;
 const KALININGRAD_TIMEZONE = 'Europe/Kaliningrad';
 
 const board = document.getElementById('booking-board');
+const bookingsView = document.getElementById('bookings-view');
+const waitlistView = document.getElementById('waitlist-view');
+const viewMenu = document.getElementById('view-menu');
+const bookingsViewBtn = document.getElementById('bookings-view-btn');
+const waitlistViewBtn = document.getElementById('waitlist-view-btn');
+const pageTitleLabel = document.getElementById('page-title-label');
 const nowIndicator = document.getElementById('now-indicator');
 const nowLine = document.getElementById('now-line');
 const nowBeacon = document.getElementById('now-beacon');
@@ -68,28 +76,39 @@ const durationMinusBtn = document.getElementById('duration-minus');
 const durationPlusBtn = document.getElementById('duration-plus');
 const durationCountOutput = document.getElementById('duration-count');
 
+const waitlistForm = document.getElementById('waitlist-form');
+const waitlistNameInput = document.getElementById('waitlist-name');
+const waitlistPhoneInput = document.getElementById('waitlist-phone');
+const waitlistCommentInput = document.getElementById('waitlist-comment');
+const waitlistItems = document.getElementById('waitlist-items');
+
 const paletteButtons = Array.from(document.querySelectorAll('.palette-btn'));
 
 const bookingsByDate = new Map();
 const SUPABASE_SETTINGS = window.BOOKING_SUPABASE_CONFIG || {};
 const BOOKINGS_TABLE = SUPABASE_SETTINGS.bookingsTable || 'booking_sheet_bookings';
+const WAITLIST_TABLE = SUPABASE_SETTINGS.waitlistTable || 'booking_sheet_waitlist';
+const META_TABLE = SUPABASE_SETTINGS.metaTable || 'booking_sheet_meta';
 const bookingDatabase = createBookingDatabaseClient();
 
 let selectedDate = getLocalISODate();
 let scheduleEndMinutes = getScheduleEndMinutes(selectedDate);
 let timeSlots = buildTimeSlots(scheduleEndMinutes);
 let currentTheme = 'yellow';
+let currentView = 'bookings';
 
 let modalMode = 'create';
 let editingBookingId = null;
 let activeSlot = null;
 let guestCount = 1;
-let durationSlots = MIN_DURATION_SLOTS;
+let durationSlots = DEFAULT_DURATION_SLOTS;
 let transferModeActive = false;
 let draggedBookingId = null;
 let suppressNextCellClick = false;
 let bookingsChannel = null;
 let lastRealtimeEventAt = null;
+
+const waitlistByDate = new Map();
 
 function createBookingDatabaseClient() {
   const url = SUPABASE_SETTINGS.url?.trim() || '';
@@ -248,6 +267,13 @@ function getMinDurationSlots(startTimeIndex = getStartTimeIndex()) {
   return Math.min(MIN_DURATION_SLOTS, maxSlots);
 }
 
+function getDefaultDurationSlots(startTimeIndex = getStartTimeIndex()) {
+  const maxSlots = getMaxSlotsFromStart(startTimeIndex);
+  if (maxSlots < 1) return 0;
+
+  return Math.min(DEFAULT_DURATION_SLOTS, maxSlots);
+}
+
 function setCounter(output, value) {
   output.textContent = value;
 }
@@ -278,6 +304,35 @@ function removeBookingFromCache(bookingId, bookingDate = null) {
 
   bookingsByDate.forEach((dayBookings) => {
     dayBookings.delete(bookingId);
+  });
+}
+
+function getWaitlistForSelectedDate() {
+  if (!waitlistByDate.has(selectedDate)) {
+    waitlistByDate.set(selectedDate, new Map());
+  }
+  return waitlistByDate.get(selectedDate);
+}
+
+function getWaitlistForDate(waitlistDate) {
+  if (!waitlistByDate.has(waitlistDate)) {
+    waitlistByDate.set(waitlistDate, new Map());
+  }
+  return waitlistByDate.get(waitlistDate);
+}
+
+function cacheWaitlistEntry(entry) {
+  getWaitlistForDate(entry.date).set(entry.id, entry);
+}
+
+function removeWaitlistEntryFromCache(entryId, entryDate = null) {
+  if (entryDate && waitlistByDate.has(entryDate)) {
+    waitlistByDate.get(entryDate).delete(entryId);
+    return;
+  }
+
+  waitlistByDate.forEach((dayEntries) => {
+    dayEntries.delete(entryId);
   });
 }
 
@@ -315,6 +370,29 @@ function serializeBookingForDatabase(booking) {
   };
 }
 
+function normalizeWaitlistRow(row) {
+  if (!row?.id) return null;
+
+  return {
+    id: row.id,
+    date: row.waitlist_date,
+    name: row.guest_name || '',
+    phone: row.guest_phone || '',
+    comment: row.guest_comment || '',
+    createdAt: row.created_at || ''
+  };
+}
+
+function serializeWaitlistForDatabase(entry) {
+  return {
+    id: entry.id,
+    waitlist_date: entry.date,
+    guest_name: entry.name,
+    guest_phone: entry.phone,
+    guest_comment: entry.comment
+  };
+}
+
 async function loadBookingsFromDatabase() {
   if (!bookingDatabase) {
     setSyncStatus('Supabase не настроен', 'error');
@@ -349,6 +427,52 @@ async function loadBookingsFromDatabase() {
   setSyncStatus('Онлайн', 'live');
 }
 
+async function loadWaitlistFromDatabase() {
+  if (!bookingDatabase) {
+    renderWaitlist();
+    return;
+  }
+
+  const { data, error } = await bookingDatabase
+    .from(WAITLIST_TABLE)
+    .select('id, waitlist_date, guest_name, guest_phone, guest_comment, created_at')
+    .order('waitlist_date', { ascending: true })
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    console.error('Supabase waitlist load error:', error);
+    setSyncStatus('Ошибка загрузки листа ожидания', 'error');
+    return;
+  }
+
+  waitlistByDate.clear();
+  (data || []).forEach((row) => {
+    const entry = normalizeWaitlistRow(row);
+    if (entry) cacheWaitlistEntry(entry);
+  });
+
+  renderWaitlist();
+}
+
+async function loadThemeFromDatabase() {
+  if (!bookingDatabase) return;
+
+  const { data, error } = await bookingDatabase
+    .from(META_TABLE)
+    .select('value')
+    .eq('key', 'current_theme')
+    .maybeSingle();
+
+  if (error) {
+    console.error('Supabase theme load error:', error);
+    return;
+  }
+
+  if (data?.value && THEMES[data.value]) {
+    applyTheme(data.value);
+  }
+}
+
 async function saveBookingToDatabase(booking) {
   if (!bookingDatabase) {
     removeBookingFromCache(booking.id);
@@ -377,6 +501,65 @@ async function saveBookingToDatabase(booking) {
   return true;
 }
 
+async function saveThemeToDatabase(themeName) {
+  if (!bookingDatabase || !THEMES[themeName]) return;
+
+  const { error } = await bookingDatabase
+    .from(META_TABLE)
+    .upsert({ key: 'current_theme', value: themeName }, { onConflict: 'key' });
+
+  if (error) {
+    console.error('Supabase theme save error:', error);
+    setSyncStatus('Ошибка сохранения темы', 'error');
+  }
+}
+
+async function saveWaitlistEntryToDatabase(entry) {
+  if (!bookingDatabase) {
+    cacheWaitlistEntry(entry);
+    renderWaitlist();
+    setSyncStatus('Локальный режим', 'error');
+    return true;
+  }
+
+  const { error } = await bookingDatabase
+    .from(WAITLIST_TABLE)
+    .upsert(serializeWaitlistForDatabase(entry), { onConflict: 'id' });
+
+  if (error) {
+    console.error('Supabase waitlist save error:', error);
+    setSyncStatus('Ошибка сохранения листа ожидания', 'error');
+    return false;
+  }
+
+  cacheWaitlistEntry(entry);
+  renderWaitlist();
+  setSyncStatus('Онлайн', 'live');
+  return true;
+}
+
+async function deleteWaitlistEntryFromDatabase(entry) {
+  if (!bookingDatabase) {
+    removeWaitlistEntryFromCache(entry.id, entry.date);
+    renderWaitlist();
+    setSyncStatus('Локальный режим', 'error');
+    return true;
+  }
+
+  const { error } = await bookingDatabase.from(WAITLIST_TABLE).delete().eq('id', entry.id);
+
+  if (error) {
+    console.error('Supabase waitlist delete error:', error);
+    setSyncStatus('Ошибка удаления из листа ожидания', 'error');
+    return false;
+  }
+
+  removeWaitlistEntryFromCache(entry.id, entry.date);
+  renderWaitlist();
+  setSyncStatus('Онлайн', 'live');
+  return true;
+}
+
 async function deleteBookingFromDatabase(booking) {
   if (!bookingDatabase) {
     removeBookingFromCache(booking.id, booking.date);
@@ -400,9 +583,9 @@ async function deleteBookingFromDatabase(booking) {
   return true;
 }
 
-function applyRealtimePayload(payload) {
+function applyBookingRealtimePayload(payload) {
   lastRealtimeEventAt = new Date();
-  console.info('Supabase realtime payload:', payload);
+  console.info('Supabase bookings realtime payload:', payload);
 
   if (payload.eventType === 'DELETE') {
     const bookingId = payload.old?.id;
@@ -423,6 +606,36 @@ function applyRealtimePayload(payload) {
   setSyncStatus('Онлайн', 'live');
 }
 
+function applyMetaRealtimePayload(payload) {
+  lastRealtimeEventAt = new Date();
+  console.info('Supabase meta realtime payload:', payload);
+
+  if (payload.new?.key === 'current_theme' && THEMES[payload.new.value]) {
+    applyTheme(payload.new.value);
+  }
+
+  setSyncStatus('Онлайн', 'live');
+}
+
+function applyWaitlistRealtimePayload(payload) {
+  lastRealtimeEventAt = new Date();
+  console.info('Supabase waitlist realtime payload:', payload);
+
+  if (payload.eventType === 'DELETE') {
+    const entryId = payload.old?.id;
+    const entryDate = payload.old?.waitlist_date || null;
+    if (entryId) {
+      removeWaitlistEntryFromCache(entryId, entryDate);
+    }
+  } else {
+    const entry = normalizeWaitlistRow(payload.new);
+    if (entry) cacheWaitlistEntry(entry);
+  }
+
+  renderWaitlist();
+  setSyncStatus('Онлайн', 'live');
+}
+
 function subscribeToBookingChanges() {
   if (!bookingDatabase || bookingsChannel) return;
 
@@ -434,7 +647,17 @@ function subscribeToBookingChanges() {
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: BOOKINGS_TABLE },
-      applyRealtimePayload
+      applyBookingRealtimePayload
+    )
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: WAITLIST_TABLE },
+      applyWaitlistRealtimePayload
+    )
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: META_TABLE },
+      applyMetaRealtimePayload
     )
     .subscribe((status, error) => {
       console.info('Supabase realtime status:', status, error || '');
@@ -451,7 +674,9 @@ function subscribeToBookingChanges() {
 
 async function bootstrapBookingsSync() {
   subscribeToBookingChanges();
+  await loadThemeFromDatabase();
   await loadBookingsFromDatabase();
+  await loadWaitlistFromDatabase();
 }
 
 function applyTheme(themeName) {
@@ -619,7 +844,7 @@ function openCreateModal(slot) {
   guestPhoneInput.value = '';
   guestCommentInput.value = '';
   guestCount = 1;
-  durationSlots = getMinDurationSlots(slot.timeIndex);
+  durationSlots = getDefaultDurationSlots(slot.timeIndex);
 
   setCounter(guestsCountOutput, String(guestCount));
   startTimeSelect.value = String(slot.timeIndex);
@@ -839,6 +1064,8 @@ function paintBookings() {
     cell.textContent = '';
     cell.removeAttribute('title');
     cell.draggable = false;
+    cell.style.removeProperty('--booking-accent');
+    cell.style.removeProperty('--booking-accent-deep');
     delete cell.dataset.bookingId;
   });
 
@@ -850,9 +1077,13 @@ function paintBookings() {
       );
       if (!cell) continue;
 
-        cell.classList.add('booked');
-        cell.dataset.bookingId = booking.id;
-        cell.draggable = true;
+      const theme = THEMES[booking.colorTheme] || THEMES.yellow;
+
+      cell.classList.add('booked');
+      cell.dataset.bookingId = booking.id;
+      cell.draggable = true;
+      cell.style.setProperty('--booking-accent', theme.accent);
+      cell.style.setProperty('--booking-accent-deep', theme.accentDeep);
 
       if (i === 0) {
         cell.classList.add('booked-top');
@@ -882,6 +1113,78 @@ function paintBookings() {
   }
 }
 
+function renderWaitlist() {
+  waitlistItems.innerHTML = '';
+  const entries = Array.from(getWaitlistForSelectedDate().values()).sort((left, right) => {
+    return String(left.createdAt).localeCompare(String(right.createdAt));
+  });
+
+  if (entries.length === 0) {
+    const emptyState = document.createElement('div');
+    emptyState.className = 'waitlist-empty';
+    emptyState.textContent = 'На эту дату лист ожидания пуст.';
+    waitlistItems.append(emptyState);
+    return;
+  }
+
+  entries.forEach((entry) => {
+    const card = document.createElement('article');
+    card.className = 'waitlist-card';
+
+    const content = document.createElement('div');
+
+    const name = document.createElement('div');
+    name.className = 'waitlist-name';
+    name.textContent = entry.name;
+    content.append(name);
+
+    if (entry.phone) {
+      const phone = document.createElement('div');
+      phone.className = 'waitlist-phone';
+      phone.textContent = entry.phone;
+      content.append(phone);
+    }
+
+    if (entry.comment) {
+      const comment = document.createElement('div');
+      comment.className = 'waitlist-comment';
+      comment.textContent = entry.comment;
+      content.append(comment);
+    }
+
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'waitlist-delete-btn';
+    deleteButton.textContent = 'Удалить';
+    deleteButton.addEventListener('click', () => {
+      void deleteWaitlistEntryFromDatabase(entry);
+    });
+
+    card.append(content, deleteButton);
+    waitlistItems.append(card);
+  });
+}
+
+function setCurrentView(viewName) {
+  currentView = viewName === 'waitlist' ? 'waitlist' : 'bookings';
+  const isWaitlist = currentView === 'waitlist';
+
+  bookingsView.classList.toggle('hidden', isWaitlist);
+  waitlistView.classList.toggle('hidden', !isWaitlist);
+  bookingsViewBtn.classList.toggle('active', !isWaitlist);
+  waitlistViewBtn.classList.toggle('active', isWaitlist);
+  pageTitleLabel.textContent = isWaitlist ? 'Лист ожидания на' : 'Лист броней на';
+  viewMenu.removeAttribute('open');
+
+  if (isWaitlist) {
+    renderWaitlist();
+  } else {
+    fitBoardToViewport();
+    paintBookings();
+    updateNowIndicatorPosition();
+  }
+}
+
 function createBookingPayload(tableIndex, startTimeIndex, slotsCount, baseId = null) {
   return {
     id: baseId || crypto.randomUUID(),
@@ -907,7 +1210,7 @@ function resetModalState() {
   editingBookingId = null;
   activeSlot = null;
   guestCount = 1;
-  durationSlots = getMinDurationSlots(0) || MIN_DURATION_SLOTS;
+  durationSlots = getDefaultDurationSlots(0) || DEFAULT_DURATION_SLOTS;
 
   guestNameInput.value = '';
   guestPhoneInput.value = '';
@@ -926,6 +1229,8 @@ function initEvents() {
     syncScheduleForSelectedDate();
     populateTimeSelect();
     renderGrid();
+    renderWaitlist();
+    setCurrentView(currentView);
   });
 
   startTimeSelect.addEventListener('change', () => {
@@ -956,7 +1261,7 @@ function initEvents() {
     if (maxSlots < minSlots) {
       selectedSlotText.textContent = transferModeActive
         ? 'Для переноса на это время недостаточно слотов.'
-        : 'Для этого старта недостаточно времени до закрытия (минимум 2 часа).';
+        : 'Для этого старта недостаточно времени до закрытия.';
       return;
     }
     durationSlots = Math.min(maxSlots, durationSlots + 1);
@@ -966,8 +1271,35 @@ function initEvents() {
   paletteButtons.forEach((btn) => {
     btn.addEventListener('click', () => {
       applyTheme(btn.dataset.theme);
-      paintBookings();
+      void saveThemeToDatabase(btn.dataset.theme);
     });
+  });
+
+  bookingsViewBtn.addEventListener('click', () => {
+    setCurrentView('bookings');
+  });
+
+  waitlistViewBtn.addEventListener('click', () => {
+    setCurrentView('waitlist');
+  });
+
+  waitlistForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+
+    const name = waitlistNameInput.value.trim();
+    if (!name) return;
+
+    const entry = {
+      id: crypto.randomUUID(),
+      date: selectedDate,
+      name,
+      phone: waitlistPhoneInput.value.trim(),
+      comment: waitlistCommentInput.value.trim(),
+      createdAt: new Date().toISOString()
+    };
+
+    const saved = await saveWaitlistEntryToDatabase(entry);
+    if (saved) waitlistForm.reset();
   });
 
   cancelBtn.addEventListener('click', closeModalAndReset);

@@ -18,9 +18,23 @@
   <body>
     <div class="page-shell">
       <header class="page-header">
+        <div class="view-switcher">
+          <details id="view-menu" class="view-menu">
+            <summary class="view-menu-trigger" aria-label="Открыть меню разделов">⌄</summary>
+            <div class="view-menu-list">
+              <button type="button" id="bookings-view-btn" class="view-menu-btn active">
+                Лист броней
+              </button>
+              <button type="button" id="waitlist-view-btn" class="view-menu-btn">
+                Лист ожидания
+              </button>
+            </div>
+          </details>
+        </div>
+
         <div class="header-copy">
           <h1 class="page-title">
-            <span>Лист броней на</span>
+            <span id="page-title-label">Лист броней на</span>
             <input
               id="booking-date"
               class="title-date-input"
@@ -49,13 +63,36 @@
         ></div>
       </header>
 
-      <main class="board-wrap">
+      <main id="bookings-view" class="board-wrap">
         <div id="booking-board" class="booking-board" aria-label="Таблица бронирования"></div>
         <div id="now-indicator" class="now-indicator hidden" aria-hidden="true">
           <div id="now-beacon" class="now-beacon"></div>
           <div id="now-line" class="now-line"></div>
         </div>
       </main>
+
+      <section id="waitlist-view" class="waitlist-view hidden">
+        <form id="waitlist-form" class="waitlist-form">
+          <label class="field">
+            Имя
+            <input id="waitlist-name" type="text" required maxlength="60" />
+          </label>
+
+          <label class="field">
+            Телефон
+            <input id="waitlist-phone" type="tel" maxlength="20" placeholder="+7..." />
+          </label>
+
+          <label class="field">
+            Комментарий
+            <textarea id="waitlist-comment" rows="3" maxlength="240"></textarea>
+          </label>
+
+          <button type="submit" class="primary waitlist-submit">Добавить в лист ожидания</button>
+        </form>
+
+        <div id="waitlist-items" class="waitlist-items" aria-label="Лист ожидания"></div>
+      </section>
     </div>
 
     <dialog id="booking-modal" class="booking-modal">
