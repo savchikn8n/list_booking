@@ -76,6 +76,9 @@ begin
     from public.booking_sheet_meta
     where key = 'bar_column_migrated'
   ) then
+    alter table public.booking_sheet_bookings
+      drop constraint if exists booking_sheet_bookings_no_overlap;
+
     update public.booking_sheet_bookings
     set table_index = table_index + 1;
 
