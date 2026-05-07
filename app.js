@@ -52,6 +52,7 @@ const form = document.getElementById('booking-form');
 const modalTitle = document.getElementById('modal-title');
 const selectedSlotText = document.getElementById('selected-slot');
 const syncStatus = document.getElementById('sync-status');
+const syncBanner = document.getElementById('sync-banner');
 
 const cancelBtn = document.getElementById('cancel-btn');
 const saveBtn = document.getElementById('save-btn');
@@ -89,6 +90,9 @@ const SUPABASE_SETTINGS = window.BOOKING_SUPABASE_CONFIG || {};
 const BOOKINGS_TABLE = SUPABASE_SETTINGS.bookingsTable || 'booking_sheet_bookings';
 const WAITLIST_TABLE = SUPABASE_SETTINGS.waitlistTable || 'booking_sheet_waitlist';
 const META_TABLE = SUPABASE_SETTINGS.metaTable || 'booking_sheet_meta';
+const SNAPSHOT_STORAGE_PREFIX = 'booking_snapshot:';
+const OPS_QUEUE_STORAGE_KEY = 'booking_ops_queue';
+const SYNC_META_STORAGE_KEY = 'booking_sync_meta';
 const bookingDatabase = createBookingDatabaseClient();
 
 let selectedDate = getLocalISODate();
@@ -107,6 +111,7 @@ let draggedBookingId = null;
 let suppressNextCellClick = false;
 let bookingsChannel = null;
 let lastRealtimeEventAt = null;
+let isFlushingBookingOpsQueue = false;
 
 const waitlistByDate = new Map();
 
@@ -278,6 +283,30 @@ function setCounter(output, value) {
   output.textContent = value;
 }
 
+function readJsonStorage(key, fallbackValue) {
+  try {
+    const rawValue = window.localStorage.getItem(key);
+    return rawValue ? JSON.parse(rawValue) : fallbackValue;
+  } catch (error) {
+    console.error('Storage read error:', key, error);
+    return fallbackValue;
+  }
+}
+
+function writeJsonStorage(key, value) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch (error) {
+    console.error('Storage write error:', key, error);
+    return false;
+  }
+}
+
+function getSnapshotStorageKey(date) {
+  return `${SNAPSHOT_STORAGE_PREFIX}${date}`;
+}
+
 function getBookingsForSelectedDate() {
   if (!bookingsByDate.has(selectedDate)) {
     bookingsByDate.set(selectedDate, new Map());
@@ -306,7 +335,114 @@ function removeBookingFromCache(bookingId, bookingDate = null) {
     dayBookings.delete(bookingId);
   });
 }
+function getStoredSnapshot(date) {
+  return readJsonStorage(getSnapshotStorageKey(date), null);
+}
 
+function storeSnapshot(date) {
+  const bookings = Array.from(getBookingsForDate(date).values());
+  return writeJsonStorage(getSnapshotStorageKey(date), {
+    date,
+    bookings,
+    lastFetchedAt: new Date().toISOString(),
+    lastMutationAt: new Date().toISOString()
+  });
+}
+
+function restoreSnapshot(date) {
+  const snapshot = getStoredSnapshot(date);
+  if (!snapshot || !Array.isArray(snapshot.bookings)) return false;
+
+  const restoredBookings = new Map();
+  snapshot.bookings.forEach((booking) => {
+    if (booking && booking.id) {
+      restoredBookings.set(booking.id, booking);
+    }
+  });
+
+  bookingsByDate.set(date, restoredBookings);
+  return true;
+}
+
+function getOpsQueue() {
+  return readJsonStorage(OPS_QUEUE_STORAGE_KEY, []);
+}
+
+function setOpsQueue(queue) {
+  return writeJsonStorage(OPS_QUEUE_STORAGE_KEY, queue);
+}
+
+function enqueueBookingOperation(type, booking) {
+  const queue = getOpsQueue().filter((entry) => entry.bookingId !== booking.id);
+  queue.push({
+    opId: `${booking.id}:${type}:${Date.now()}`,
+    type,
+    bookingId: booking.id,
+    date: booking.date,
+    payload: booking,
+    status: 'pending',
+    retryCount: 0,
+    updatedAt: new Date().toISOString()
+  });
+  setOpsQueue(queue);
+  updateSyncBanner();
+}
+
+function withSyncState(booking, syncState) {
+  return {
+    ...booking,
+    syncState
+  };
+}
+
+function getPendingBookingIds(date = null) {
+  return new Set(
+    getOpsQueue()
+      .filter((entry) => !date || entry.date === date)
+      .map((entry) => entry.bookingId)
+  );
+}
+
+function updateSyncBanner() {
+  const queue = getOpsQueue();
+  if (!queue.length) {
+    syncBanner.classList.add('hidden');
+    syncBanner.textContent = '';
+    return;
+  }
+
+  const failedCount = queue.filter((entry) => entry.status === 'failed').length;
+  syncBanner.classList.remove('hidden');
+  syncBanner.textContent = failedCount
+    ? `Не синхронизировано: ${failedCount}`
+    : `Синхронизация: ${queue.length}`;
+}
+
+function updateSyncMeta(metaPatch) {
+  const currentMeta = readJsonStorage(SYNC_META_STORAGE_KEY, {});
+  writeJsonStorage(SYNC_META_STORAGE_KEY, {
+    ...currentMeta,
+    ...metaPatch
+  });
+}
+
+function removeBookingOperation(bookingId) {
+  const queue = getOpsQueue().filter((entry) => entry.bookingId !== bookingId);
+  setOpsQueue(queue);
+  updateSyncBanner();
+}
+
+function updateBookingOperation(bookingId, operationPatch) {
+  const queue = getOpsQueue().map((entry) => {
+    if (entry.bookingId !== bookingId) return entry;
+    return {
+      ...entry,
+      ...operationPatch
+    };
+  });
+  setOpsQueue(queue);
+  updateSyncBanner();
+}
 function getWaitlistForSelectedDate() {
   if (!waitlistByDate.has(selectedDate)) {
     waitlistByDate.set(selectedDate, new Map());
@@ -393,10 +529,12 @@ function serializeWaitlistForDatabase(entry) {
   };
 }
 
-async function loadBookingsFromDatabase() {
+async function loadBookingsFromDatabase(date = selectedDate) {
   if (!bookingDatabase) {
     setSyncStatus('Supabase не настроен', 'error');
-    paintBookings();
+    if (date === selectedDate) {
+      paintBookings();
+    }
     return;
   }
 
@@ -407,7 +545,7 @@ async function loadBookingsFromDatabase() {
     .select(
       'id, booking_date, table_index, time_index, start_minutes, duration_slots, guest_name, guest_phone, guest_comment, guests, color_theme'
     )
-    .order('booking_date', { ascending: true })
+    .eq('booking_date', date)
     .order('table_index', { ascending: true })
     .order('time_index', { ascending: true });
 
@@ -417,13 +555,16 @@ async function loadBookingsFromDatabase() {
     return;
   }
 
-  bookingsByDate.clear();
+  const normalizedBookings = [];
   (data || []).forEach((row) => {
     const booking = normalizeBookingRow(row);
-    if (booking) cacheBooking(booking);
+    if (booking) normalizedBookings.push(withSyncState(booking, 'synced'));
   });
 
-  paintBookings();
+  reconcileBookingsForDate(date, normalizedBookings);
+  if (date === selectedDate) {
+    paintBookings();
+  }
   setSyncStatus('Онлайн', 'live');
 }
 
@@ -473,32 +614,14 @@ async function loadThemeFromDatabase() {
   }
 }
 
-async function saveBookingToDatabase(booking) {
+async function upsertBookingOnServer(booking) {
   if (!bookingDatabase) {
-    removeBookingFromCache(booking.id);
-    cacheBooking(booking);
-    paintBookings();
-    setSyncStatus('Локальный режим', 'error');
-    return true;
+    return { ok: false, error: new Error('Supabase unavailable') };
   }
-
   const { error } = await bookingDatabase
     .from(BOOKINGS_TABLE)
     .upsert(serializeBookingForDatabase(booking), { onConflict: 'id' });
-
-  if (error) {
-    console.error('Supabase save error:', error);
-    setSyncStatus('Ошибка сохранения', 'error');
-    selectedSlotText.textContent =
-      'Не удалось сохранить бронь в Supabase. Проверь таблицу, RLS и realtime-настройки.';
-    return false;
-  }
-
-  removeBookingFromCache(booking.id);
-  cacheBooking(booking);
-  paintBookings();
-  setSyncStatus('Онлайн', 'live');
-  return true;
+  return { ok: !error, error };
 }
 
 async function saveThemeToDatabase(themeName) {
@@ -560,36 +683,159 @@ async function deleteWaitlistEntryFromDatabase(entry) {
   return true;
 }
 
-async function deleteBookingFromDatabase(booking) {
+async function deleteBookingOnServer(bookingId) {
   if (!bookingDatabase) {
-    removeBookingFromCache(booking.id, booking.date);
-    paintBookings();
-    setSyncStatus('Локальный режим', 'error');
-    return true;
+    return { ok: false, error: new Error('Supabase unavailable') };
   }
 
-  const { error } = await bookingDatabase.from(BOOKINGS_TABLE).delete().eq('id', booking.id);
+  const { error } = await bookingDatabase.from(BOOKINGS_TABLE).delete().eq('id', bookingId);
+  return { ok: !error, error };
+}
 
-  if (error) {
-    console.error('Supabase delete error:', error);
-    setSyncStatus('Ошибка удаления', 'error');
-    selectedSlotText.textContent = 'Не удалось удалить бронь из Supabase.';
-    return false;
-  }
-
-  removeBookingFromCache(booking.id, booking.date);
+function applyLocalBookingUpsert(booking, syncState) {
+  const localBooking = withSyncState(booking, syncState);
+  removeBookingFromCache(localBooking.id);
+  cacheBooking(localBooking);
+  storeSnapshot(localBooking.date);
   paintBookings();
-  setSyncStatus('Онлайн', 'live');
+}
+
+function applyLocalBookingDelete(booking) {
+  removeBookingFromCache(booking.id, booking.date);
+  storeSnapshot(booking.date);
+  paintBookings();
+}
+
+function reconcileBookingsForDate(date, serverBookings) {
+  const localBookings = getBookingsForDate(date);
+  const pendingIds = getPendingBookingIds(date);
+  const reconciled = new Map();
+
+  serverBookings.forEach((booking) => {
+    if (!pendingIds.has(booking.id)) {
+      reconciled.set(booking.id, withSyncState(booking, 'synced'));
+    }
+  });
+
+  localBookings.forEach((booking, bookingId) => {
+    if (pendingIds.has(bookingId)) {
+      reconciled.set(bookingId, booking);
+    }
+  });
+
+  bookingsByDate.set(date, reconciled);
+  storeSnapshot(date);
+}
+
+async function flushBookingOpsQueue() {
+  if (isFlushingBookingOpsQueue) return;
+  isFlushingBookingOpsQueue = true;
+
+  const queue = getOpsQueue();
+  if (!queue.length) {
+    isFlushingBookingOpsQueue = false;
+    updateSyncBanner();
+    return;
+  }
+
+  const nextQueue = [];
+
+  for (const entry of queue) {
+    updateBookingOperation(entry.bookingId, {
+      status: 'syncing',
+      updatedAt: new Date().toISOString()
+    });
+
+    if (entry.type === 'delete') {
+      const deleteResult = await deleteBookingOnServer(entry.bookingId);
+      if (!deleteResult.ok) {
+        nextQueue.push({
+          ...entry,
+          status: 'failed',
+          retryCount: entry.retryCount + 1,
+          updatedAt: new Date().toISOString()
+        });
+      }
+      removeBookingOperation(entry.bookingId);
+      continue;
+    }
+
+    const upsertResult = await upsertBookingOnServer(entry.payload);
+    if (!upsertResult.ok) {
+      console.error('Supabase save error:', upsertResult.error);
+      applyLocalBookingUpsert(entry.payload, 'failed');
+      nextQueue.push({
+        ...entry,
+        status: 'failed',
+        retryCount: entry.retryCount + 1,
+        updatedAt: new Date().toISOString()
+      });
+      continue;
+    }
+
+    applyLocalBookingUpsert(entry.payload, 'synced');
+    removeBookingOperation(entry.bookingId);
+  }
+
+  setOpsQueue(nextQueue);
+  updateSyncMeta({ lastGlobalSyncAt: new Date().toISOString() });
+  updateSyncBanner();
+  if (nextQueue.length) {
+    setSyncStatus('Есть несинхронизированные изменения', 'error');
+  } else {
+    setSyncStatus('Онлайн', 'live');
+  }
+  isFlushingBookingOpsQueue = false;
+}
+
+function hydrateSelectedDateFromStorage() {
+  const restored = restoreSnapshot(selectedDate);
+  if (restored) {
+    paintBookings();
+  }
+}
+
+async function saveBookingToDatabase(booking) {
+  applyLocalBookingUpsert(booking, 'pending');
+  enqueueBookingOperation('upsert', booking);
+  setSyncStatus('Сохраняем локально', 'waiting');
+  void flushBookingOpsQueue();
   return true;
+}
+
+async function deleteBookingFromDatabase(booking) {
+  applyLocalBookingDelete(booking);
+  enqueueBookingOperation('delete', booking);
+  setSyncStatus('Удаление в очереди', 'waiting');
+  void flushBookingOpsQueue();
+  return true;
+}
+
+async function refreshSelectedDateData() {
+  const date = selectedDate;
+  hydrateSelectedDateFromStorage();
+  renderGrid();
+  renderWaitlist();
+  setCurrentView(currentView);
+  updateSyncMeta({ activeDate: date });
+  await flushBookingOpsQueue();
+  await loadBookingsFromDatabase(date);
 }
 
 function applyBookingRealtimePayload(payload) {
   lastRealtimeEventAt = new Date();
   console.info('Supabase bookings realtime payload:', payload);
 
+  const bookingId = payload.eventType === 'DELETE' ? payload.old?.id : payload.new?.id;
+  const bookingDate =
+    payload.eventType === 'DELETE' ? payload.old?.booking_date || null : payload.new?.booking_date || null;
+
+  if (bookingId && getPendingBookingIds(bookingDate).has(bookingId)) {
+    setSyncStatus('Онлайн', 'live');
+    return;
+  }
+
   if (payload.eventType === 'DELETE') {
-    const bookingId = payload.old?.id;
-    const bookingDate = payload.old?.booking_date || null;
     if (bookingId) {
       removeBookingFromCache(bookingId, bookingDate);
 
@@ -599,10 +845,17 @@ function applyBookingRealtimePayload(payload) {
     }
   } else {
     const booking = normalizeBookingRow(payload.new);
-    if (booking) cacheBooking(booking);
+    if (booking) {
+      cacheBooking(withSyncState(booking, 'synced'));
+    }
   }
 
-  paintBookings();
+  if (bookingDate) {
+    storeSnapshot(bookingDate);
+  }
+  if (bookingDate === selectedDate) {
+    paintBookings();
+  }
   setSyncStatus('Онлайн', 'live');
 }
 
@@ -674,7 +927,11 @@ function subscribeToBookingChanges() {
 
 async function bootstrapBookingsSync() {
   subscribeToBookingChanges();
+  hydrateSelectedDateFromStorage();
+  updateSyncBanner();
+  updateSyncMeta({ activeDate: selectedDate });
   await loadThemeFromDatabase();
+  await flushBookingOpsQueue();
   await loadBookingsFromDatabase();
   await loadWaitlistFromDatabase();
 }
@@ -1224,9 +1481,7 @@ function initEvents() {
     selectedDate = bookingDateInput.value || getLocalISODate();
     syncScheduleForSelectedDate();
     populateTimeSelect();
-    renderGrid();
-    renderWaitlist();
-    setCurrentView(currentView);
+    void refreshSelectedDateData();
   });
 
   startTimeSelect.addEventListener('change', () => {
@@ -1441,6 +1696,10 @@ function initEvents() {
   window.addEventListener('resize', () => {
     fitBoardToViewport();
     updateNowIndicatorPosition();
+  });
+
+  window.addEventListener('online', () => {
+    void flushBookingOpsQueue();
   });
 
   setInterval(() => {

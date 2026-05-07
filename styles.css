@@ -169,6 +169,19 @@ body {
     0 0 10px rgba(220, 47, 47, 0.7);
 }
 
+.sync-banner {
+  position: absolute;
+  top: 22px;
+  right: 0;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(34, 29, 24, 0.88);
+  color: #fff;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  z-index: 10;
+}
+
 .title-date-input {
   border: 0;
   border-bottom: 2px solid rgba(95, 90, 83, 0.45);
@@ -702,6 +715,13 @@ body {
   .sync-status {
     position: static;
     justify-self: end;
+  }
+
+  .sync-banner {
+    top: 34px;
+    right: 0;
+    font-size: 0.72rem;
+    padding: 5px 8px;
   }
 
   .cell {
