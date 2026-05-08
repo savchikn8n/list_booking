@@ -94,7 +94,9 @@ const SNAPSHOT_STORAGE_PREFIX = 'booking_snapshot:';
 const OPS_QUEUE_STORAGE_KEY = 'booking_ops_queue';
 const SYNC_META_STORAGE_KEY = 'booking_sync_meta';
 const bookingDatabase = createBookingDatabaseClient();
+const bookingSyncStateApi = window.bookingSyncState || {};
 const bookingVisualStateApi = window.bookingVisualState || {};
+const BOOKING_SYNC_RETRY_INTERVAL_MS = 15000;
 
 let selectedDate = getLocalISODate();
 let scheduleEndMinutes = getScheduleEndMinutes(selectedDate);
@@ -397,9 +399,18 @@ function withSyncState(booking, syncState) {
 }
 
 function getPendingBookingIds(date = null) {
+  const queue = getOpsQueue();
+  if (typeof bookingSyncStateApi.getBlockingBookingIds === 'function' && date) {
+    return new Set(bookingSyncStateApi.getBlockingBookingIds(queue, date));
+  }
+
   return new Set(
-    getOpsQueue()
-      .filter((entry) => !date || entry.date === date)
+    queue
+      .filter(
+        (entry) =>
+          (!date || entry.date === date) &&
+          (entry.status === 'pending' || entry.status === 'syncing')
+      )
       .map((entry) => entry.bookingId)
   );
 }
@@ -1786,6 +1797,10 @@ function initEvents() {
   window.addEventListener('online', () => {
     void flushBookingOpsQueue();
   });
+
+  setInterval(() => {
+    void flushBookingOpsQueue();
+  }, BOOKING_SYNC_RETRY_INTERVAL_MS);
 
   setInterval(() => {
     paintBookings();
