@@ -94,6 +94,7 @@ const SNAPSHOT_STORAGE_PREFIX = 'booking_snapshot:';
 const OPS_QUEUE_STORAGE_KEY = 'booking_ops_queue';
 const SYNC_META_STORAGE_KEY = 'booking_sync_meta';
 const bookingDatabase = createBookingDatabaseClient();
+const bookingVisualStateApi = window.bookingVisualState || {};
 
 let selectedDate = getLocalISODate();
 let scheduleEndMinutes = getScheduleEndMinutes(selectedDate);
@@ -486,7 +487,9 @@ function normalizeBookingRow(row) {
     comment: row.guest_comment || '',
     guests: Number(row.guests) || 1,
     date: row.booking_date,
-    colorTheme: row.color_theme || 'yellow'
+    colorTheme: row.color_theme || 'yellow',
+    arrivalStatus: row.arrival_status === 'active' ? 'active' : 'pending',
+    arrivalMarkedAt: row.arrival_marked_at || null
   };
 }
 
@@ -502,8 +505,53 @@ function serializeBookingForDatabase(booking) {
     guest_phone: booking.phone,
     guest_comment: booking.comment,
     guests: booking.guests,
-    color_theme: booking.colorTheme
+    color_theme: booking.colorTheme,
+    arrival_status: booking.arrivalStatus || 'pending',
+    arrival_marked_at: booking.arrivalMarkedAt || null
   };
+}
+
+function getBookingThemeTokens(colorTheme) {
+  const theme = THEMES[colorTheme] || THEMES.yellow;
+  return {
+    accent: theme.accent,
+    accentDeep: theme.accentDeep
+  };
+}
+
+function getBookingVisualState(booking, nowTimelineMinutes) {
+  if (typeof bookingVisualStateApi.getBookingVisualState === 'function') {
+    return bookingVisualStateApi.getBookingVisualState({
+      booking,
+      nowTimelineMinutes
+    });
+  }
+
+  if (booking.arrivalStatus === 'active') return 'active';
+  if (!Number.isFinite(nowTimelineMinutes)) return 'neutral';
+  if (nowTimelineMinutes >= booking.startMinutes + 10) return 'overdue';
+  if (booking.startMinutes > nowTimelineMinutes) return 'upcoming';
+  return 'pending';
+}
+
+async function toggleBookingArrivalStatus(bookingId) {
+  const booking = getBookingsForSelectedDate().get(bookingId);
+  if (!booking) return;
+
+  const updatedBooking =
+    booking.arrivalStatus === 'active'
+      ? {
+          ...booking,
+          arrivalStatus: 'pending',
+          arrivalMarkedAt: null
+        }
+      : {
+          ...booking,
+          arrivalStatus: 'active',
+          arrivalMarkedAt: new Date().toISOString()
+        };
+
+  await saveBookingToDatabase(updatedBooking);
 }
 
 function normalizeWaitlistRow(row) {
@@ -543,7 +591,7 @@ async function loadBookingsFromDatabase(date = selectedDate) {
   const { data, error } = await bookingDatabase
     .from(BOOKINGS_TABLE)
     .select(
-      'id, booking_date, table_index, time_index, start_minutes, duration_slots, guest_name, guest_phone, guest_comment, guests, color_theme'
+      'id, booking_date, table_index, time_index, start_minutes, duration_slots, guest_name, guest_phone, guest_comment, guests, color_theme, arrival_status, arrival_marked_at'
     )
     .eq('booking_date', date)
     .order('table_index', { ascending: true })
@@ -1132,6 +1180,14 @@ function openViewModal(booking) {
 }
 
 function onCellClick(event) {
+  const toggle = event.target.closest('.booking-arrival-toggle');
+  if (toggle?.dataset.bookingId) {
+    event.preventDefault();
+    event.stopPropagation();
+    void toggleBookingArrivalStatus(toggle.dataset.bookingId);
+    return;
+  }
+
   if (suppressNextCellClick) {
     suppressNextCellClick = false;
     return;
@@ -1316,6 +1372,8 @@ function isTimeRangeFree(tableIndex, startTimeIndex, slotsCount, ignoreBookingId
 }
 
 function paintBookings() {
+  const nowTimelineMinutes = getKaliningradBusinessTimelinePosition();
+
   document.querySelectorAll('.slot-cell').forEach((cell) => {
     cell.classList.remove('booked', 'booked-top', 'booked-bottom', 'dragging');
     cell.textContent = '';
@@ -1323,10 +1381,14 @@ function paintBookings() {
     cell.draggable = false;
     cell.style.removeProperty('--booking-accent');
     cell.style.removeProperty('--booking-accent-deep');
+    cell.removeAttribute('data-arrival-state');
     delete cell.dataset.bookingId;
   });
 
   for (const booking of getBookingsForSelectedDate().values()) {
+    const visualState = getBookingVisualState(booking, nowTimelineMinutes);
+    const themeTokens = getBookingThemeTokens(booking.colorTheme);
+
     for (let i = 0; i < booking.durationSlots; i += 1) {
       const timeIndex = booking.timeIndex + i;
       const cell = document.querySelector(
@@ -1337,9 +1399,20 @@ function paintBookings() {
       cell.classList.add('booked');
       cell.dataset.bookingId = booking.id;
       cell.draggable = true;
+      cell.dataset.arrivalState = visualState;
+      cell.style.setProperty('--booking-accent', themeTokens.accent);
+      cell.style.setProperty('--booking-accent-deep', themeTokens.accentDeep);
 
       if (i === 0) {
         cell.classList.add('booked-top');
+
+        const toggle = document.createElement('span');
+        toggle.className = 'booking-arrival-toggle';
+        toggle.dataset.bookingId = booking.id;
+        toggle.setAttribute('role', 'checkbox');
+        toggle.setAttribute('aria-checked', booking.arrivalStatus === 'active' ? 'true' : 'false');
+        toggle.title = booking.arrivalStatus === 'active' ? 'Гость активен' : 'Отметить гостя как пришедшего';
+        cell.append(toggle);
 
         const text = document.createElement('span');
         text.className = 'booking-text';
@@ -1352,6 +1425,14 @@ function paintBookings() {
           note.className = 'booking-note';
           note.textContent = booking.phone;
           cell.append(note);
+        }
+
+        if (visualState === 'overdue') {
+          const badge = document.createElement('span');
+          badge.className = 'booking-alert-badge';
+          badge.textContent = '!';
+          badge.title = 'Гость не отмечен через 10 минут после начала брони';
+          cell.append(badge);
         }
       }
 
@@ -1450,7 +1531,9 @@ function createBookingPayload(tableIndex, startTimeIndex, slotsCount, baseId = n
     comment: guestCommentInput.value.trim(),
     guests: guestCount,
     date: selectedDate,
-    colorTheme: currentTheme
+    colorTheme: currentTheme,
+    arrivalStatus: 'pending',
+    arrivalMarkedAt: null
   };
 }
 
@@ -1673,6 +1756,8 @@ function initEvents() {
         durationSlots,
         editingBookingId
       );
+      updated.arrivalStatus = currentBooking.arrivalStatus || 'pending';
+      updated.arrivalMarkedAt = currentBooking.arrivalMarkedAt || null;
       const saved = await saveBookingToDatabase(updated);
       if (saved) closeModalAndReset();
     }
@@ -1703,6 +1788,7 @@ function initEvents() {
   });
 
   setInterval(() => {
+    paintBookings();
     updateNowIndicatorPosition();
   }, 30000);
 }

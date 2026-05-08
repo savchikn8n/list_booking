@@ -14,6 +14,10 @@ create table if not exists public.booking_sheet_bookings (
   color_theme text not null default 'yellow' check (
     color_theme in ('yellow', 'blue', 'purple', 'green')
   ),
+  arrival_status text not null default 'pending' check (
+    arrival_status in ('pending', 'active')
+  ),
+  arrival_marked_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -56,6 +60,15 @@ begin
     drop constraint if exists booking_sheet_bookings_table_index_check;
 
   alter table public.booking_sheet_bookings
+    drop constraint if exists booking_sheet_bookings_arrival_status_check;
+
+  alter table public.booking_sheet_bookings
+    add column if not exists arrival_status text not null default 'pending';
+
+  alter table public.booking_sheet_bookings
+    add column if not exists arrival_marked_at timestamptz;
+
+  alter table public.booking_sheet_bookings
     add constraint booking_sheet_bookings_guest_phone_check
     check (char_length(trim(guest_phone)) between 0 and 20);
 
@@ -70,6 +83,10 @@ begin
   alter table public.booking_sheet_bookings
     add constraint booking_sheet_bookings_table_index_check
     check (table_index between 0 and 15);
+
+  alter table public.booking_sheet_bookings
+    add constraint booking_sheet_bookings_arrival_status_check
+    check (arrival_status in ('pending', 'active'));
 
   if not exists (
     select 1

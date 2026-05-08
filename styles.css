@@ -353,18 +353,53 @@ body {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(175deg, color-mix(in srgb, var(--accent) 92%, white 8%), color-mix(in srgb, var(--accent-deep) 84%, white 16%)),
+    linear-gradient(175deg, color-mix(in srgb, var(--booking-accent, var(--accent)) 92%, white 8%), color-mix(in srgb, var(--booking-accent-deep, var(--accent-deep)) 84%, white 16%)),
     radial-gradient(circle at 18% 14%, rgba(255, 255, 255, 0.35), transparent 42%);
   pointer-events: none;
   z-index: 0;
 }
 
+.slot-cell.booked[data-arrival-state='upcoming']::before,
+.slot-cell.booked[data-arrival-state='pending']::before {
+  background:
+    linear-gradient(175deg, rgba(232, 235, 238, 0.98), rgba(205, 211, 216, 0.98)),
+    radial-gradient(circle at 18% 14%, rgba(255, 255, 255, 0.48), transparent 42%);
+}
+
+.slot-cell.booked[data-arrival-state='neutral']::before {
+  opacity: 0.72;
+}
+
+.slot-cell.booked[data-arrival-state='overdue']::before {
+  background:
+    linear-gradient(175deg, rgba(255, 102, 102, 0.98), rgba(214, 33, 33, 0.98)),
+    radial-gradient(circle at 18% 14%, rgba(255, 255, 255, 0.24), transparent 42%);
+}
+
+.slot-cell.booked[data-arrival-state='upcoming'].booked-top,
+.slot-cell.booked[data-arrival-state='pending'].booked-top {
+  border-top-color: rgba(164, 173, 181, 0.95);
+}
+
+.slot-cell.booked[data-arrival-state='upcoming'].booked-bottom,
+.slot-cell.booked[data-arrival-state='pending'].booked-bottom {
+  border-bottom-color: rgba(164, 173, 181, 0.95);
+}
+
+.slot-cell.booked[data-arrival-state='overdue'].booked-top {
+  border-top-color: rgba(190, 22, 22, 0.98);
+}
+
+.slot-cell.booked[data-arrival-state='overdue'].booked-bottom {
+  border-bottom-color: rgba(190, 22, 22, 0.98);
+}
+
 .slot-cell.booked-top {
-  border-top: 1px solid color-mix(in srgb, var(--accent-deep) 70%, #6a5642 30%);
+  border-top: 1px solid color-mix(in srgb, var(--booking-accent-deep, var(--accent-deep)) 70%, #6a5642 30%);
 }
 
 .slot-cell.booked-bottom {
-  border-bottom: 1px solid color-mix(in srgb, var(--accent-deep) 70%, #6a5642 30%);
+  border-bottom: 1px solid color-mix(in srgb, var(--booking-accent-deep, var(--accent-deep)) 70%, #6a5642 30%);
 }
 
 .booking-text,
@@ -389,6 +424,50 @@ body {
   font-size: 0.62rem;
   opacity: 0.8;
   margin-top: 1px;
+}
+
+.booking-arrival-toggle {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  border: 1px solid rgba(61, 55, 48, 0.42);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 3px rgba(27, 23, 19, 0.12);
+  z-index: 2;
+}
+
+.booking-arrival-toggle::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border-radius: 3px;
+  background: transparent;
+}
+
+.slot-cell.booked[data-arrival-state='active'] .booking-arrival-toggle::after {
+  background: rgba(46, 142, 72, 0.92);
+}
+
+.booking-alert-badge {
+  position: absolute;
+  top: 4px;
+  right: 24px;
+  min-width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  background: #d42626;
+  color: #fff;
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 1;
+  z-index: 2;
 }
 
 .last-col {
