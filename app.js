@@ -61,6 +61,7 @@ const transferBtn = document.getElementById('transfer-btn');
 const transferBox = document.getElementById('transfer-box');
 const transferConfirmBtn = document.getElementById('transfer-confirm');
 const transferTableSelect = document.getElementById('transfer-table');
+const extendModeBtn = document.getElementById('extend-mode-btn');
 
 const bookingDateInput = document.getElementById('booking-date');
 const startTimeSelect = document.getElementById('start-time');
@@ -95,6 +96,7 @@ const OPS_QUEUE_STORAGE_KEY = 'booking_ops_queue';
 const SYNC_META_STORAGE_KEY = 'booking_sync_meta';
 const bookingDatabase = createBookingDatabaseClient();
 const bookingSyncStateApi = window.bookingSyncState || {};
+const bookingExtensionApi = window.bookingExtension || {};
 const bookingVisualStateApi = window.bookingVisualState || {};
 const BOOKING_SYNC_RETRY_INTERVAL_MS = 15000;
 
@@ -115,6 +117,8 @@ let suppressNextCellClick = false;
 let bookingsChannel = null;
 let lastRealtimeEventAt = null;
 let isFlushingBookingOpsQueue = false;
+let isExtendMode = false;
+let selectedExtendBookingId = null;
 
 const waitlistByDate = new Map();
 
@@ -522,8 +526,8 @@ function serializeBookingForDatabase(booking) {
   };
 }
 
-function getBookingThemeTokens(colorTheme) {
-  const theme = THEMES[colorTheme] || THEMES.yellow;
+function getBookingThemeTokens() {
+  const theme = THEMES[currentTheme] || THEMES.yellow;
   return {
     accent: theme.accent,
     accentDeep: theme.accentDeep
@@ -563,6 +567,64 @@ async function toggleBookingArrivalStatus(bookingId) {
         };
 
   await saveBookingToDatabase(updatedBooking);
+}
+
+function setExtendMode(isActive) {
+  isExtendMode = Boolean(isActive);
+  if (!isExtendMode) {
+    selectedExtendBookingId = null;
+  }
+  extendModeBtn.classList.toggle('active', isExtendMode);
+  extendModeBtn.setAttribute('aria-pressed', isExtendMode ? 'true' : 'false');
+  paintBookings();
+}
+
+function getExtendedDurationSlots(booking, targetTableIndex, targetTimeIndex) {
+  const totalInteractiveSlots = Math.max(0, timeSlots.length - 1);
+  if (typeof bookingExtensionApi.getExtendedDurationSlots === 'function') {
+    return bookingExtensionApi.getExtendedDurationSlots({
+      booking,
+      targetTableIndex,
+      targetTimeIndex,
+      totalInteractiveSlots,
+      bookings: Array.from(getBookingsForSelectedDate().values())
+    });
+  }
+
+  if (!booking || targetTableIndex !== booking.tableIndex) return null;
+  if (targetTimeIndex < booking.timeIndex + booking.durationSlots) return null;
+  if (targetTimeIndex >= totalInteractiveSlots) return null;
+
+  const nextDurationSlots = targetTimeIndex - booking.timeIndex + 1;
+  return isTimeRangeFree(booking.tableIndex, booking.timeIndex, nextDurationSlots, booking.id)
+    ? nextDurationSlots
+    : null;
+}
+
+async function tryExtendSelectedBooking(targetTableIndex, targetTimeIndex) {
+  const booking = selectedExtendBookingId
+    ? getBookingsForSelectedDate().get(selectedExtendBookingId)
+    : null;
+  if (!booking) {
+    selectedExtendBookingId = null;
+    paintBookings();
+    return;
+  }
+
+  const nextDurationSlots = getExtendedDurationSlots(booking, targetTableIndex, targetTimeIndex);
+  if (!nextDurationSlots) return;
+
+  const updatedBooking = {
+    ...booking,
+    durationSlots: nextDurationSlots,
+    colorTheme: currentTheme
+  };
+
+  const saved = await saveBookingToDatabase(updatedBooking);
+  if (saved) {
+    selectedExtendBookingId = null;
+    paintBookings();
+  }
 }
 
 function normalizeWaitlistRow(row) {
@@ -1005,6 +1067,10 @@ function applyTheme(themeName) {
   paletteButtons.forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.theme === currentTheme);
   });
+
+  if (board.childElementCount) {
+    paintBookings();
+  }
 }
 
 function fitBoardToViewport() {
@@ -1206,6 +1272,23 @@ function onCellClick(event) {
 
   const cell = event.currentTarget;
 
+  if (isExtendMode) {
+    if (cell.dataset.bookingId) {
+      selectedExtendBookingId =
+        selectedExtendBookingId === cell.dataset.bookingId ? null : cell.dataset.bookingId;
+      paintBookings();
+      return;
+    }
+
+    if (selectedExtendBookingId) {
+      void tryExtendSelectedBooking(
+        Number(cell.dataset.tableIndex),
+        Number(cell.dataset.timeIndex)
+      );
+    }
+    return;
+  }
+
   if (cell.dataset.bookingId) {
     const booking = getBookingsForSelectedDate().get(cell.dataset.bookingId);
     if (booking) {
@@ -1227,6 +1310,11 @@ function clearDropHints() {
 }
 
 function onCellDragStart(event) {
+  if (isExtendMode) {
+    event.preventDefault();
+    return;
+  }
+
   const cell = event.currentTarget;
   const bookingId = cell.dataset.bookingId;
   if (!bookingId) {
@@ -1393,12 +1481,13 @@ function paintBookings() {
     cell.style.removeProperty('--booking-accent');
     cell.style.removeProperty('--booking-accent-deep');
     cell.removeAttribute('data-arrival-state');
+    cell.classList.remove('extend-selected');
     delete cell.dataset.bookingId;
   });
 
   for (const booking of getBookingsForSelectedDate().values()) {
     const visualState = getBookingVisualState(booking, nowTimelineMinutes);
-    const themeTokens = getBookingThemeTokens(booking.colorTheme);
+    const themeTokens = getBookingThemeTokens();
 
     for (let i = 0; i < booking.durationSlots; i += 1) {
       const timeIndex = booking.timeIndex + i;
@@ -1409,13 +1498,19 @@ function paintBookings() {
 
       cell.classList.add('booked');
       cell.dataset.bookingId = booking.id;
-      cell.draggable = true;
+      cell.draggable = !isExtendMode;
       cell.dataset.arrivalState = visualState;
       cell.style.setProperty('--booking-accent', themeTokens.accent);
       cell.style.setProperty('--booking-accent-deep', themeTokens.accentDeep);
+      if (isExtendMode && booking.id === selectedExtendBookingId) {
+        cell.classList.add('extend-selected');
+      }
 
       if (i === 0) {
         cell.classList.add('booked-top');
+
+        const header = document.createElement('span');
+        header.className = 'booking-card-header';
 
         const toggle = document.createElement('span');
         toggle.className = 'booking-arrival-toggle';
@@ -1423,27 +1518,31 @@ function paintBookings() {
         toggle.setAttribute('role', 'checkbox');
         toggle.setAttribute('aria-checked', booking.arrivalStatus === 'active' ? 'true' : 'false');
         toggle.title = booking.arrivalStatus === 'active' ? 'Гость активен' : 'Отметить гостя как пришедшего';
-        cell.append(toggle);
 
         const text = document.createElement('span');
         text.className = 'booking-text';
         text.textContent = `${booking.name} (${booking.guests})`;
 
-        cell.append(text);
-
-        if (booking.phone) {
-          const note = document.createElement('span');
-          note.className = 'booking-note';
-          note.textContent = booking.phone;
-          cell.append(note);
-        }
+        const controls = document.createElement('span');
+        controls.className = 'booking-card-controls';
 
         if (visualState === 'overdue') {
           const badge = document.createElement('span');
           badge.className = 'booking-alert-badge';
           badge.textContent = '!';
           badge.title = 'Гость не отмечен через 10 минут после начала брони';
-          cell.append(badge);
+          controls.append(badge);
+        }
+
+        controls.append(toggle);
+        header.append(text, controls);
+        cell.append(header);
+
+        if (booking.phone) {
+          const note = document.createElement('span');
+          note.className = 'booking-note';
+          note.textContent = booking.phone;
+          cell.append(note);
         }
       }
 
@@ -1522,6 +1621,7 @@ function setCurrentView(viewName) {
   viewMenu.removeAttribute('open');
 
   if (isWaitlist) {
+    setExtendMode(false);
     renderWaitlist();
   } else {
     fitBoardToViewport();
@@ -1573,6 +1673,7 @@ function initEvents() {
   bookingDateInput.value = selectedDate;
   bookingDateInput.addEventListener('change', () => {
     selectedDate = bookingDateInput.value || getLocalISODate();
+    selectedExtendBookingId = null;
     syncScheduleForSelectedDate();
     populateTimeSelect();
     void refreshSelectedDateData();
@@ -1618,6 +1719,10 @@ function initEvents() {
       applyTheme(btn.dataset.theme);
       void saveThemeToDatabase(btn.dataset.theme);
     });
+  });
+
+  extendModeBtn.addEventListener('click', () => {
+    setExtendMode(!isExtendMode);
   });
 
   bookingsViewBtn.addEventListener('click', () => {
