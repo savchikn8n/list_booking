@@ -61,6 +61,8 @@ const transferBtn = document.getElementById('transfer-btn');
 const transferBox = document.getElementById('transfer-box');
 const transferConfirmBtn = document.getElementById('transfer-confirm');
 const transferTableSelect = document.getElementById('transfer-table');
+const arrivalBox = document.getElementById('arrival-box');
+const arrivalToggleBtn = document.getElementById('arrival-toggle-btn');
 const extendModeBtn = document.getElementById('extend-mode-btn');
 
 const bookingDateInput = document.getElementById('booking-date');
@@ -97,6 +99,7 @@ const SYNC_META_STORAGE_KEY = 'booking_sync_meta';
 const bookingDatabase = createBookingDatabaseClient();
 const bookingCardLayoutApi = window.bookingCardLayout || {};
 const bookingSyncStateApi = window.bookingSyncState || {};
+const bookingSyncIndicatorApi = window.bookingSyncIndicator || {};
 const bookingExtensionApi = window.bookingExtension || {};
 const bookingVisualStateApi = window.bookingVisualState || {};
 const BOOKING_SYNC_RETRY_INTERVAL_MS = 5000;
@@ -122,6 +125,7 @@ let isFlushingBookingOpsQueue = false;
 let isExtendMode = false;
 let selectedExtendBookingId = null;
 let lastLifecycleRestoreAt = 0;
+let hasRealtimeConnectionError = false;
 
 const waitlistByDate = new Map();
 
@@ -156,6 +160,30 @@ function setSyncStatus(text, state) {
   syncStatus.setAttribute('aria-label', statusText);
   syncStatus.classList.remove('is-waiting', 'is-live', 'is-error');
   syncStatus.classList.add(`is-${state}`);
+}
+
+function getIndicatorState({ hasConnectionError, hasQueueIssues, isBusy }) {
+  if (typeof bookingSyncIndicatorApi.getIndicatorState === 'function') {
+    return bookingSyncIndicatorApi.getIndicatorState({
+      hasConnectionError,
+      hasQueueIssues,
+      isBusy
+    });
+  }
+
+  if (hasConnectionError) return 'error';
+  if (hasQueueIssues || isBusy) return 'waiting';
+  return 'live';
+}
+
+function updateSyncIndicator(text, options = {}) {
+  const queue = getOpsQueue();
+  const state = getIndicatorState({
+    hasConnectionError: Boolean(options.hasConnectionError ?? hasRealtimeConnectionError),
+    hasQueueIssues: queue.some((entry) => entry.status === 'failed'),
+    isBusy: Boolean(options.isBusy)
+  });
+  setSyncStatus(text, state);
 }
 
 function getLocalISODate(date = new Date()) {
@@ -444,6 +472,20 @@ function updateSyncBanner() {
     : `Синхронизация: ${queue.length}`;
 }
 
+function updateArrivalToggleButton(booking) {
+  if (!booking || modalMode !== 'view') {
+    arrivalBox.classList.add('hidden');
+    arrivalToggleBtn.classList.remove('is-active');
+    arrivalToggleBtn.textContent = 'Отметить как пришедшего';
+    return;
+  }
+
+  arrivalBox.classList.remove('hidden');
+  const isActive = booking.arrivalStatus === 'active';
+  arrivalToggleBtn.classList.toggle('is-active', isActive);
+  arrivalToggleBtn.textContent = isActive ? 'Гость пришёл' : 'Отметить как пришедшего';
+}
+
 function updateSyncMeta(metaPatch) {
   const currentMeta = readJsonStorage(SYNC_META_STORAGE_KEY, {});
   writeJsonStorage(SYNC_META_STORAGE_KEY, {
@@ -713,7 +755,7 @@ async function loadBookingsFromDatabase(date = selectedDate) {
     return;
   }
 
-  setSyncStatus('Загрузка броней...', 'waiting');
+  updateSyncIndicator('Загрузка броней...', { isBusy: true });
 
   const { data, error } = await bookingDatabase
     .from(BOOKINGS_TABLE)
@@ -726,7 +768,8 @@ async function loadBookingsFromDatabase(date = selectedDate) {
 
   if (error) {
     console.error('Supabase load error:', error);
-    setSyncStatus('Ошибка загрузки', 'error');
+    hasRealtimeConnectionError = true;
+    updateSyncIndicator('Ошибка загрузки', { hasConnectionError: true });
     return;
   }
 
@@ -740,7 +783,8 @@ async function loadBookingsFromDatabase(date = selectedDate) {
   if (date === selectedDate) {
     paintBookings();
   }
-  setSyncStatus('Онлайн', 'live');
+  hasRealtimeConnectionError = false;
+  updateSyncIndicator('Онлайн');
 }
 
 async function loadWaitlistFromDatabase() {
@@ -757,7 +801,7 @@ async function loadWaitlistFromDatabase() {
 
   if (error) {
     console.error('Supabase waitlist load error:', error);
-    setSyncStatus('Ошибка загрузки листа ожидания', 'error');
+    updateSyncIndicator('Ошибка загрузки листа ожидания');
     return;
   }
 
@@ -808,7 +852,7 @@ async function saveThemeToDatabase(themeName) {
 
   if (error) {
     console.error('Supabase theme save error:', error);
-    setSyncStatus('Ошибка сохранения темы', 'error');
+    updateSyncIndicator('Ошибка сохранения темы');
   }
 }
 
@@ -816,7 +860,7 @@ async function saveWaitlistEntryToDatabase(entry) {
   if (!bookingDatabase) {
     cacheWaitlistEntry(entry);
     renderWaitlist();
-    setSyncStatus('Локальный режим', 'error');
+    updateSyncIndicator('Локальный режим', { isBusy: true });
     return true;
   }
 
@@ -826,13 +870,13 @@ async function saveWaitlistEntryToDatabase(entry) {
 
   if (error) {
     console.error('Supabase waitlist save error:', error);
-    setSyncStatus('Ошибка сохранения листа ожидания', 'error');
+    updateSyncIndicator('Ошибка сохранения листа ожидания');
     return false;
   }
 
   cacheWaitlistEntry(entry);
   renderWaitlist();
-  setSyncStatus('Онлайн', 'live');
+  updateSyncIndicator('Онлайн');
   return true;
 }
 
@@ -840,7 +884,7 @@ async function deleteWaitlistEntryFromDatabase(entry) {
   if (!bookingDatabase) {
     removeWaitlistEntryFromCache(entry.id, entry.date);
     renderWaitlist();
-    setSyncStatus('Локальный режим', 'error');
+    updateSyncIndicator('Локальный режим', { isBusy: true });
     return true;
   }
 
@@ -848,13 +892,13 @@ async function deleteWaitlistEntryFromDatabase(entry) {
 
   if (error) {
     console.error('Supabase waitlist delete error:', error);
-    setSyncStatus('Ошибка удаления из листа ожидания', 'error');
+    updateSyncIndicator('Ошибка удаления из листа ожидания');
     return false;
   }
 
   removeWaitlistEntryFromCache(entry.id, entry.date);
   renderWaitlist();
-  setSyncStatus('Онлайн', 'live');
+  updateSyncIndicator('Онлайн');
   return true;
 }
 
@@ -964,9 +1008,9 @@ async function flushBookingOpsQueue() {
   updateSyncMeta({ lastGlobalSyncAt: new Date().toISOString() });
   updateSyncBanner();
   if (nextQueue.length) {
-    setSyncStatus('Есть несинхронизированные изменения', 'error');
+    updateSyncIndicator('Есть несинхронизированные изменения');
   } else {
-    setSyncStatus('Онлайн', 'live');
+    updateSyncIndicator('Онлайн');
   }
   isFlushingBookingOpsQueue = false;
 }
@@ -998,7 +1042,7 @@ function restoreSelectedDateFromLocalState() {
 async function saveBookingToDatabase(booking) {
   applyLocalBookingUpsert(booking, 'pending');
   enqueueBookingOperation('upsert', booking);
-  setSyncStatus('Сохраняем локально', 'waiting');
+  updateSyncIndicator('Сохраняем локально', { isBusy: true });
   void flushBookingOpsQueue();
   return true;
 }
@@ -1006,7 +1050,7 @@ async function saveBookingToDatabase(booking) {
 async function deleteBookingFromDatabase(booking) {
   applyLocalBookingDelete(booking);
   enqueueBookingOperation('delete', booking);
-  setSyncStatus('Удаление в очереди', 'waiting');
+  updateSyncIndicator('Удаление в очереди', { isBusy: true });
   void flushBookingOpsQueue();
   return true;
 }
@@ -1031,7 +1075,7 @@ function applyBookingRealtimePayload(payload) {
     payload.eventType === 'DELETE' ? payload.old?.booking_date || null : payload.new?.booking_date || null;
 
   if (bookingId && getPendingBookingIds(bookingDate).has(bookingId)) {
-    setSyncStatus('Онлайн', 'live');
+    updateSyncIndicator('Онлайн');
     return;
   }
 
@@ -1056,7 +1100,7 @@ function applyBookingRealtimePayload(payload) {
   if (bookingDate === selectedDate) {
     paintBookings();
   }
-  setSyncStatus('Онлайн', 'live');
+  updateSyncIndicator('Онлайн');
 }
 
 function applyMetaRealtimePayload(payload) {
@@ -1067,7 +1111,7 @@ function applyMetaRealtimePayload(payload) {
     applyTheme(payload.new.value);
   }
 
-  setSyncStatus('Онлайн', 'live');
+  updateSyncIndicator('Онлайн');
 }
 
 function applyWaitlistRealtimePayload(payload) {
@@ -1086,13 +1130,13 @@ function applyWaitlistRealtimePayload(payload) {
   }
 
   renderWaitlist();
-  setSyncStatus('Онлайн', 'live');
+  updateSyncIndicator('Онлайн');
 }
 
 function subscribeToBookingChanges() {
   if (!bookingDatabase || bookingsChannel) return;
 
-  setSyncStatus('Подключение realtime...', 'waiting');
+  updateSyncIndicator('Подключение realtime...', { isBusy: true });
   console.info('Supabase realtime subscribe start:', BOOKINGS_TABLE);
 
   bookingsChannel = bookingDatabase
@@ -1116,11 +1160,13 @@ function subscribeToBookingChanges() {
       console.info('Supabase realtime status:', status, error || '');
 
       if (status === 'SUBSCRIBED') {
-        setSyncStatus('Realtime подключен', 'live');
+        hasRealtimeConnectionError = false;
+        updateSyncIndicator('Realtime подключен');
       }
 
       if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-        setSyncStatus('Realtime недоступен', 'error');
+        hasRealtimeConnectionError = true;
+        updateSyncIndicator('Realtime недоступен', { hasConnectionError: true });
       }
     });
 }
@@ -1276,6 +1322,10 @@ function updateSlotInfo() {
 
   selectedSlotText.textContent = `${selectedDate} | ${minutesToLabel(startMinutes)} - ${minutesToLabel(endMinutes)} (${formatDurationFromSlots(durationSlots)})`;
   setCounter(durationCountOutput, formatDurationFromSlots(durationSlots));
+
+  if (modalMode === 'view' && editingBookingId) {
+    updateArrivalToggleButton(getBookingsForSelectedDate().get(editingBookingId) || null);
+  }
 }
 
 function setModalMode(mode) {
@@ -1287,6 +1337,7 @@ function setModalMode(mode) {
   transferBtn.classList.toggle('hidden', !viewMode);
   transferBox.classList.add('hidden');
   startTimeSelect.disabled = false;
+  arrivalBox.classList.toggle('hidden', !viewMode);
 
   saveBtn.textContent = viewMode ? 'Сохранить изменения' : 'Сохранить бронь';
   cancelBtn.textContent = viewMode ? 'Закрыть' : 'Отмена';
@@ -1311,6 +1362,7 @@ function openCreateModal(slot) {
   setCounter(guestsCountOutput, String(guestCount));
   startTimeSelect.value = String(slot.timeIndex);
   updateSlotInfo();
+  updateArrivalToggleButton(null);
 
   modal.showModal();
 }
@@ -1332,6 +1384,7 @@ function openViewModal(booking) {
   startTimeSelect.value = String(booking.timeIndex);
   populateTransferTables(booking.tableIndex);
   updateSlotInfo();
+  updateArrivalToggleButton(booking);
 
   modal.showModal();
 }
@@ -1608,14 +1661,6 @@ function paintBookings() {
           controls.append(badge);
         }
 
-        const inlineToggle = document.createElement('span');
-        inlineToggle.className = 'booking-arrival-toggle booking-arrival-toggle-inline';
-        inlineToggle.dataset.bookingId = booking.id;
-        inlineToggle.setAttribute('role', 'checkbox');
-        inlineToggle.setAttribute('aria-checked', booking.arrivalStatus === 'active' ? 'true' : 'false');
-        inlineToggle.title = booking.arrivalStatus === 'active' ? 'Гость активен' : 'Отметить гостя как пришедшего';
-
-        controls.append(inlineToggle);
         header.append(text, controls);
         cell.append(header);
 
@@ -1756,6 +1801,7 @@ function resetModalState() {
   setCounter(guestsCountOutput, String(guestCount));
   setCounter(durationCountOutput, formatDurationFromSlots(durationSlots));
   selectedSlotText.textContent = '';
+  updateArrivalToggleButton(null);
 }
 
 function initEvents() {
@@ -1844,6 +1890,12 @@ function initEvents() {
   });
 
   cancelBtn.addEventListener('click', closeModalAndReset);
+
+  arrivalToggleBtn.addEventListener('click', async () => {
+    if (modalMode !== 'view' || !editingBookingId) return;
+    await toggleBookingArrivalStatus(editingBookingId);
+    updateArrivalToggleButton(getBookingsForSelectedDate().get(editingBookingId) || null);
+  });
 
   deleteBtn.addEventListener('click', async () => {
     if (modalMode !== 'view' || !editingBookingId) return;
