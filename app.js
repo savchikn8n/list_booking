@@ -16,6 +16,7 @@ const TABLES = [
   { label: '14', ps5: false },
   { label: '15', ps5: false }
 ];
+const TABLE_DISPLAY_ORDER = TABLES.map((_, index) => index).slice(1).concat(0);
 
 const THEMES = {
   yellow: { accent: '#f8c9a1', accentDeep: '#f2b27f' },
@@ -128,6 +129,14 @@ let lastLifecycleRestoreAt = 0;
 let hasRealtimeConnectionError = false;
 
 const waitlistByDate = new Map();
+
+function getDisplayTableIndices() {
+  return TABLE_DISPLAY_ORDER;
+}
+
+function getTableLabel(tableIndex) {
+  return TABLES[tableIndex] ? TABLES[tableIndex].label : '';
+}
 
 function createBookingDatabaseClient() {
   const url = SUPABASE_SETTINGS.url?.trim() || '';
@@ -1211,9 +1220,11 @@ function fitBoardToViewport() {
   const fullWidth = Math.max(wrapRect.width, 320);
   const fullHeight = Math.max(wrapRect.height, 320);
   const isMobileLayout = window.innerWidth <= MOBILE_BOARD_BREAKPOINT;
+  const displayTableCount = getDisplayTableIndices().length;
 
   if (isMobileLayout) {
-    const totalBoardWidth = MOBILE_TIME_COLUMN_WIDTH + MOBILE_TABLE_COLUMN_WIDTH * TABLES.length;
+    const totalBoardWidth =
+      MOBILE_TIME_COLUMN_WIDTH + MOBILE_TABLE_COLUMN_WIDTH * displayTableCount;
     const slotRowHeight = clamp(
       Math.floor((fullHeight - MOBILE_HEADER_ROW_HEIGHT) / timeSlots.length),
       14,
@@ -1224,7 +1235,7 @@ function fitBoardToViewport() {
 
     board.style.width = `${totalBoardWidth}px`;
     board.style.height = '100%';
-    board.style.gridTemplateColumns = `${MOBILE_TIME_COLUMN_WIDTH}px repeat(${TABLES.length}, ${MOBILE_TABLE_COLUMN_WIDTH}px)`;
+    board.style.gridTemplateColumns = `${MOBILE_TIME_COLUMN_WIDTH}px repeat(${displayTableCount}, ${MOBILE_TABLE_COLUMN_WIDTH}px)`;
     board.style.gridTemplateRows = `${MOBILE_HEADER_ROW_HEIGHT}px repeat(${timeSlots.length - 1}, ${slotRowHeight}px) ${lastMobileSlotRowHeight}px`;
     return;
   }
@@ -1234,7 +1245,7 @@ function fitBoardToViewport() {
 
   const firstColumnWidth = clamp(Math.floor(fullWidth * 0.07), 52, 86);
   const baseTableColumnWidth = clamp(
-    Math.floor((fullWidth - firstColumnWidth) / TABLES.length),
+    Math.floor((fullWidth - firstColumnWidth) / displayTableCount),
     42,
     120
   );
@@ -1245,7 +1256,7 @@ function fitBoardToViewport() {
     42
   );
 
-  const usedWidth = firstColumnWidth + baseTableColumnWidth * TABLES.length;
+  const usedWidth = firstColumnWidth + baseTableColumnWidth * displayTableCount;
   const extraWidth = Math.max(0, Math.floor(fullWidth - usedWidth));
   const lastTableColumnWidth = baseTableColumnWidth + extraWidth;
 
@@ -1253,14 +1264,17 @@ function fitBoardToViewport() {
   const extraHeight = Math.max(0, Math.floor(fullHeight - usedHeight));
   const lastSlotRowHeight = baseSlotRowHeight + extraHeight;
 
-  board.style.gridTemplateColumns = `${firstColumnWidth}px repeat(${TABLES.length - 1}, ${baseTableColumnWidth}px) ${lastTableColumnWidth}px`;
+  board.style.gridTemplateColumns = `${firstColumnWidth}px repeat(${displayTableCount - 1}, ${baseTableColumnWidth}px) ${lastTableColumnWidth}px`;
   board.style.gridTemplateRows = `${headerRowHeight}px repeat(${timeSlots.length - 1}, ${baseSlotRowHeight}px) ${lastSlotRowHeight}px`;
 }
 
 function updateNowIndicatorPosition() {
-  const firstSlotCell = document.querySelector('.slot-cell[data-table-index="0"][data-time-index="0"]');
+  const firstVisibleTableIndex = getDisplayTableIndices()[0];
+  const firstSlotCell = document.querySelector(
+    `.slot-cell[data-table-index="${firstVisibleTableIndex}"][data-time-index="0"]`
+  );
   const lastSlotCell = document.querySelector(
-    `.slot-cell[data-table-index="0"][data-time-index="${timeSlots.length - 1}"]`
+    `.slot-cell[data-table-index="${firstVisibleTableIndex}"][data-time-index="${timeSlots.length - 1}"]`
   );
 
   if (!firstSlotCell || !lastSlotCell) {
@@ -1310,12 +1324,12 @@ function populateTimeSelect() {
 
 function populateTransferTables(currentTableIndex = -1) {
   transferTableSelect.innerHTML = '';
-  TABLES.forEach((table, index) => {
+  getDisplayTableIndices().forEach((index) => {
     if (index === currentTableIndex) return;
 
     const option = document.createElement('option');
     option.value = String(index);
-    option.textContent = table.label;
+    option.textContent = getTableLabel(index);
     transferTableSelect.append(option);
   });
 }
@@ -1358,7 +1372,7 @@ function openCreateModal(slot) {
   editingBookingId = null;
   activeSlot = slot;
 
-  modalTitle.textContent = `Бронь: стол ${TABLES[slot.tableIndex].label}`;
+  modalTitle.textContent = `Бронь: стол ${getTableLabel(slot.tableIndex)}`;
 
   guestNameInput.value = '';
   guestPhoneInput.value = '';
@@ -1379,7 +1393,7 @@ function openViewModal(booking) {
   editingBookingId = booking.id;
   activeSlot = { tableIndex: booking.tableIndex, timeIndex: booking.timeIndex };
 
-  modalTitle.textContent = `Бронь: стол ${TABLES[booking.tableIndex].label}`;
+  modalTitle.textContent = `Бронь: стол ${getTableLabel(booking.tableIndex)}`;
 
   guestNameInput.value = booking.name;
   guestPhoneInput.value = booking.phone;
@@ -1541,17 +1555,18 @@ async function onCellDrop(event) {
 function renderGrid() {
   board.innerHTML = '';
   fitBoardToViewport();
+  const displayTableIndices = getDisplayTableIndices();
 
   const corner = document.createElement('div');
   corner.className = 'cell head-cell time-cell corner-cell';
   corner.textContent = 'Стол / время';
   board.appendChild(corner);
 
-  TABLES.forEach((table, index) => {
+  displayTableIndices.forEach((tableIndex, displayIndex) => {
     const head = document.createElement('div');
     head.className = 'cell head-cell';
-    if (index === TABLES.length - 1) head.classList.add('last-col');
-    head.textContent = table.label;
+    if (displayIndex === displayTableIndices.length - 1) head.classList.add('last-col');
+    head.textContent = getTableLabel(tableIndex);
     board.appendChild(head);
   });
 
@@ -1563,12 +1578,12 @@ function renderGrid() {
     timeCell.textContent = minutesToLabel(minutes);
     board.appendChild(timeCell);
 
-    TABLES.forEach((_, tableIndex) => {
+    displayTableIndices.forEach((tableIndex, displayIndex) => {
       const cell = document.createElement('button');
       cell.type = 'button';
       cell.className = 'cell slot-cell';
       cell.draggable = false;
-      if (tableIndex === TABLES.length - 1) cell.classList.add('last-col');
+      if (displayIndex === displayTableIndices.length - 1) cell.classList.add('last-col');
       if (isClosingRow) {
         cell.classList.add('last-row', 'closing-row', 'closing-slot');
         cell.disabled = true;

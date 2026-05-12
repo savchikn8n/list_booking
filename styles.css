@@ -559,7 +559,7 @@ body {
   top: 0;
   left: 0;
   height: calc(var(--grid-border) * 8);
-  background: rgba(180, 58, 58, 0.92);
+  background: rgba(180, 58, 58, 0.64);
   transform: translateY(-50%);
   pointer-events: none;
 }
