@@ -476,14 +476,21 @@ function updateArrivalToggleButton(booking) {
   if (!booking || modalMode !== 'view') {
     arrivalBox.classList.add('hidden');
     arrivalToggleBtn.classList.remove('is-active');
-    arrivalToggleBtn.textContent = 'Отметить как пришедшего';
+    arrivalToggleBtn.setAttribute('aria-checked', 'false');
+    arrivalToggleBtn.setAttribute('aria-label', 'Отметить как пришедшего');
+    arrivalToggleBtn.title = 'Отметить как пришедшего';
     return;
   }
 
   arrivalBox.classList.remove('hidden');
   const isActive = booking.arrivalStatus === 'active';
   arrivalToggleBtn.classList.toggle('is-active', isActive);
-  arrivalToggleBtn.textContent = isActive ? 'Гость пришёл' : 'Отметить как пришедшего';
+  arrivalToggleBtn.setAttribute('aria-checked', isActive ? 'true' : 'false');
+  arrivalToggleBtn.setAttribute(
+    'aria-label',
+    isActive ? 'Гость пришёл' : 'Отметить как пришедшего'
+  );
+  arrivalToggleBtn.title = isActive ? 'Гость пришёл' : 'Отметить как пришедшего';
 }
 
 function updateSyncMeta(metaPatch) {

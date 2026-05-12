@@ -620,6 +620,13 @@ body {
   gap: 10px;
 }
 
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .modal-content h2 {
   margin: 0;
   font-size: 1.05rem;
@@ -662,23 +669,36 @@ body {
 }
 
 .arrival-box {
-  border: 1px solid rgba(95, 90, 83, 0.2);
-  border-radius: 10px;
-  padding: 10px 12px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  background: rgba(255, 255, 255, 0.65);
 }
 
 .arrival-toggle-btn {
-  min-width: 190px;
+  position: relative;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(61, 55, 48, 0.42);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 1px 3px rgba(27, 23, 19, 0.12);
+  cursor: pointer;
 }
 
-.arrival-toggle-btn.is-active {
-  background: #ddf3e3;
-  color: #1f5d33;
+.arrival-toggle-btn::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 4px;
+  background: transparent;
+}
+
+.arrival-toggle-btn.is-active::after {
+  background: rgba(46, 142, 72, 0.92);
+}
+
+.arrival-toggle-btn:focus-visible {
+  outline: 2px solid rgba(31, 27, 24, 0.5);
+  outline-offset: 2px;
 }
 
 .selected-slot {

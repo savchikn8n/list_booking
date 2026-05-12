@@ -102,7 +102,12 @@
 
     <dialog id="booking-modal" class="booking-modal">
       <form id="booking-form" method="dialog" class="modal-content">
-        <h2 id="modal-title">Новая бронь</h2>
+        <div class="modal-header">
+          <h2 id="modal-title">Новая бронь</h2>
+          <div id="arrival-box" class="arrival-box hidden">
+            <span id="arrival-toggle-btn" class="arrival-toggle-btn" role="checkbox" aria-checked="false" tabindex="0"></span>
+          </div>
+        </div>
 
         <label class="field">
           Имя гостя
@@ -154,13 +159,6 @@
             <select id="transfer-table"></select>
           </label>
           <button id="transfer-confirm" type="button" class="ghost">Подтвердить перенос</button>
-        </div>
-
-        <div id="arrival-box" class="arrival-box hidden">
-          <span>Приход гостя</span>
-          <button id="arrival-toggle-btn" type="button" class="ghost arrival-toggle-btn">
-            Отметить как пришедшего
-          </button>
         </div>
 
         <p id="selected-slot" class="selected-slot"></p>
