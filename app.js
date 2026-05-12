@@ -99,7 +99,7 @@ const bookingCardLayoutApi = window.bookingCardLayout || {};
 const bookingSyncStateApi = window.bookingSyncState || {};
 const bookingExtensionApi = window.bookingExtension || {};
 const bookingVisualStateApi = window.bookingVisualState || {};
-const BOOKING_SYNC_RETRY_INTERVAL_MS = 15000;
+const BOOKING_SYNC_RETRY_INTERVAL_MS = 5000;
 const BOOKING_RESTORE_THROTTLE_MS = 1500;
 
 let selectedDate = getLocalISODate();
@@ -457,6 +457,43 @@ function persistAllBookingSnapshots() {
     storeSnapshot(bookingDate);
   });
   updateSyncMeta({ activeDate: selectedDate, lastPersistedAt: new Date().toISOString() });
+}
+
+function recoverOpsQueueFromAllSnapshots() {
+  const queue = getOpsQueue();
+  let nextQueue = queue;
+
+  bookingsByDate.forEach((dayBookings, bookingDate) => {
+    const bookings = Array.from(dayBookings.values());
+    if (typeof bookingSyncStateApi.recoverQueueFromSnapshot === 'function') {
+      nextQueue = bookingSyncStateApi.recoverQueueFromSnapshot({
+        date: bookingDate,
+        bookings,
+        queue: nextQueue
+      });
+      return;
+    }
+
+    bookings.forEach((booking) => {
+      if (!booking || !booking.id || booking.syncState === 'synced') return;
+      if (nextQueue.some((entry) => entry.bookingId === booking.id)) return;
+      nextQueue.push({
+        opId: `${booking.id}:recovered`,
+        type: 'upsert',
+        bookingId: booking.id,
+        date: bookingDate,
+        payload: booking,
+        status: booking.syncState === 'syncing' ? 'syncing' : 'pending',
+        retryCount: 0,
+        updatedAt: new Date().toISOString()
+      });
+    });
+  });
+
+  if (nextQueue !== queue || nextQueue.length !== queue.length) {
+    setOpsQueue(nextQueue);
+    updateSyncBanner();
+  }
 }
 
 function removeBookingOperation(bookingId) {
@@ -847,6 +884,14 @@ function applyLocalBookingDelete(booking) {
 function reconcileBookingsForDate(date, serverBookings) {
   const localBookings = getBookingsForDate(date);
   const pendingIds = getPendingBookingIds(date);
+  const unsyncedLocalIds =
+    typeof bookingSyncStateApi.getUnsyncedBookingIds === 'function'
+      ? new Set(bookingSyncStateApi.getUnsyncedBookingIds(Array.from(localBookings.values())))
+      : new Set(
+          Array.from(localBookings.values())
+            .filter((booking) => booking.syncState && booking.syncState !== 'synced')
+            .map((booking) => booking.id)
+        );
   const reconciled = new Map();
 
   serverBookings.forEach((booking) => {
@@ -856,7 +901,7 @@ function reconcileBookingsForDate(date, serverBookings) {
   });
 
   localBookings.forEach((booking, bookingId) => {
-    if (pendingIds.has(bookingId)) {
+    if (pendingIds.has(bookingId) || unsyncedLocalIds.has(bookingId)) {
       reconciled.set(bookingId, booking);
     }
   });
@@ -945,6 +990,7 @@ function restoreSelectedDateFromLocalState() {
     setCurrentView(currentView);
   }
 
+  recoverOpsQueueFromAllSnapshots();
   void flushBookingOpsQueue();
   void loadBookingsFromDatabase(selectedDate);
 }
@@ -1082,6 +1128,7 @@ function subscribeToBookingChanges() {
 async function bootstrapBookingsSync() {
   subscribeToBookingChanges();
   hydrateSelectedDateFromStorage();
+  recoverOpsQueueFromAllSnapshots();
   updateSyncBanner();
   updateSyncMeta({ activeDate: selectedDate });
   await loadThemeFromDatabase();
