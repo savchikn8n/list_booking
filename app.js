@@ -95,10 +95,12 @@ const SNAPSHOT_STORAGE_PREFIX = 'booking_snapshot:';
 const OPS_QUEUE_STORAGE_KEY = 'booking_ops_queue';
 const SYNC_META_STORAGE_KEY = 'booking_sync_meta';
 const bookingDatabase = createBookingDatabaseClient();
+const bookingCardLayoutApi = window.bookingCardLayout || {};
 const bookingSyncStateApi = window.bookingSyncState || {};
 const bookingExtensionApi = window.bookingExtension || {};
 const bookingVisualStateApi = window.bookingVisualState || {};
 const BOOKING_SYNC_RETRY_INTERVAL_MS = 15000;
+const BOOKING_RESTORE_THROTTLE_MS = 1500;
 
 let selectedDate = getLocalISODate();
 let scheduleEndMinutes = getScheduleEndMinutes(selectedDate);
@@ -119,6 +121,7 @@ let lastRealtimeEventAt = null;
 let isFlushingBookingOpsQueue = false;
 let isExtendMode = false;
 let selectedExtendBookingId = null;
+let lastLifecycleRestoreAt = 0;
 
 const waitlistByDate = new Map();
 
@@ -419,6 +422,13 @@ function getPendingBookingIds(date = null) {
   );
 }
 
+function getPrimaryArrivalToggleOffset(durationSlots) {
+  if (typeof bookingCardLayoutApi.getPrimaryArrivalToggleOffset === 'function') {
+    return bookingCardLayoutApi.getPrimaryArrivalToggleOffset(durationSlots);
+  }
+  return Number(durationSlots) >= 2 ? 1 : 0;
+}
+
 function updateSyncBanner() {
   const queue = getOpsQueue();
   if (!queue.length) {
@@ -440,6 +450,13 @@ function updateSyncMeta(metaPatch) {
     ...currentMeta,
     ...metaPatch
   });
+}
+
+function persistAllBookingSnapshots() {
+  bookingsByDate.forEach((_, bookingDate) => {
+    storeSnapshot(bookingDate);
+  });
+  updateSyncMeta({ activeDate: selectedDate, lastPersistedAt: new Date().toISOString() });
 }
 
 function removeBookingOperation(bookingId) {
@@ -914,6 +931,22 @@ function hydrateSelectedDateFromStorage() {
   if (restored) {
     paintBookings();
   }
+}
+
+function restoreSelectedDateFromLocalState() {
+  const now = Date.now();
+  if (now - lastLifecycleRestoreAt < BOOKING_RESTORE_THROTTLE_MS) return;
+  lastLifecycleRestoreAt = now;
+
+  const restored = restoreSnapshot(selectedDate);
+  if (restored) {
+    renderGrid();
+    renderWaitlist();
+    setCurrentView(currentView);
+  }
+
+  void flushBookingOpsQueue();
+  void loadBookingsFromDatabase(selectedDate);
 }
 
 async function saveBookingToDatabase(booking) {
@@ -1488,6 +1521,7 @@ function paintBookings() {
   for (const booking of getBookingsForSelectedDate().values()) {
     const visualState = getBookingVisualState(booking, nowTimelineMinutes);
     const themeTokens = getBookingThemeTokens();
+    const primaryToggleOffset = getPrimaryArrivalToggleOffset(booking.durationSlots);
 
     for (let i = 0; i < booking.durationSlots; i += 1) {
       const timeIndex = booking.timeIndex + i;
@@ -1512,13 +1546,6 @@ function paintBookings() {
         const header = document.createElement('span');
         header.className = 'booking-card-header';
 
-        const toggle = document.createElement('span');
-        toggle.className = 'booking-arrival-toggle';
-        toggle.dataset.bookingId = booking.id;
-        toggle.setAttribute('role', 'checkbox');
-        toggle.setAttribute('aria-checked', booking.arrivalStatus === 'active' ? 'true' : 'false');
-        toggle.title = booking.arrivalStatus === 'active' ? 'Гость активен' : 'Отметить гостя как пришедшего';
-
         const text = document.createElement('span');
         text.className = 'booking-text';
         text.textContent = `${booking.name} (${booking.guests})`;
@@ -1534,7 +1561,14 @@ function paintBookings() {
           controls.append(badge);
         }
 
-        controls.append(toggle);
+        const inlineToggle = document.createElement('span');
+        inlineToggle.className = 'booking-arrival-toggle booking-arrival-toggle-inline';
+        inlineToggle.dataset.bookingId = booking.id;
+        inlineToggle.setAttribute('role', 'checkbox');
+        inlineToggle.setAttribute('aria-checked', booking.arrivalStatus === 'active' ? 'true' : 'false');
+        inlineToggle.title = booking.arrivalStatus === 'active' ? 'Гость активен' : 'Отметить гостя как пришедшего';
+
+        controls.append(inlineToggle);
         header.append(text, controls);
         cell.append(header);
 
@@ -1544,6 +1578,16 @@ function paintBookings() {
           note.textContent = booking.phone;
           cell.append(note);
         }
+      }
+
+      if (i === primaryToggleOffset) {
+        const centeredToggle = document.createElement('span');
+        centeredToggle.className = 'booking-arrival-toggle booking-arrival-toggle-main';
+        centeredToggle.dataset.bookingId = booking.id;
+        centeredToggle.setAttribute('role', 'checkbox');
+        centeredToggle.setAttribute('aria-checked', booking.arrivalStatus === 'active' ? 'true' : 'false');
+        centeredToggle.title = booking.arrivalStatus === 'active' ? 'Гость активен' : 'Отметить гостя как пришедшего';
+        cell.append(centeredToggle);
       }
 
       if (i === booking.durationSlots - 1) {
@@ -1901,6 +1945,19 @@ function initEvents() {
 
   window.addEventListener('online', () => {
     void flushBookingOpsQueue();
+  });
+
+  window.addEventListener('pagehide', persistAllBookingSnapshots);
+  window.addEventListener('beforeunload', persistAllBookingSnapshots);
+  window.addEventListener('pageshow', restoreSelectedDateFromLocalState);
+  window.addEventListener('focus', restoreSelectedDateFromLocalState);
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      persistAllBookingSnapshots();
+      return;
+    }
+    restoreSelectedDateFromLocalState();
   });
 
   setInterval(() => {
