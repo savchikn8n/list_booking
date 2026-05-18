@@ -3,6 +3,7 @@ const {
   getBlockingBookingIds,
   getUnsyncedBookingIds,
   createBookingEventPayload,
+  getFlushableQueueOperations,
   normalizeQueueOperations,
   recoverQueueFromSnapshot,
   hasQueueOperation,
@@ -94,6 +95,17 @@ assert.strictEqual(normalizedLegacyQueue[0].status, 'pending');
 assert.strictEqual(normalizedLegacyQueue[1].opId, 'modern-1:upsert:1');
 assert.strictEqual(normalizedLegacyQueue[1].status, 'failed');
 assert.strictEqual(normalizedLegacyQueue[1].retryCount, 2);
+
+const flushableQueue = getFlushableQueueOperations([
+  { opId: 'failed-first', status: 'failed', bookingId: 'a' },
+  { opId: 'pending-second', status: 'pending', bookingId: 'b' },
+  { opId: 'syncing-third', status: 'syncing', bookingId: 'c' }
+]);
+
+assert.deepStrictEqual(
+  flushableQueue.map((entry) => entry.opId),
+  ['pending-second', 'syncing-third']
+);
 
 const eventPayload = createBookingEventPayload({
   entry: {

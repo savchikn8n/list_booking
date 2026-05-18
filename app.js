@@ -524,7 +524,8 @@ function normalizeOpsQueue({ forcePending = false } = {}) {
   const nextQueue = forcePending
     ? normalizedQueue.map((entry) => ({
         ...entry,
-        status: entry.status === 'syncing' ? 'pending' : entry.status
+        status: entry.status === 'syncing' || entry.status === 'failed' ? 'pending' : entry.status,
+        lastError: entry.status === 'failed' ? '' : entry.lastError
       }))
     : normalizedQueue;
   const didChange = JSON.stringify(queue) !== JSON.stringify(nextQueue);
@@ -1335,12 +1336,16 @@ async function flushBookingOpsQueue() {
 
   try {
     const queue = normalizeOpsQueue();
-    if (!queue.length) {
+    const flushableQueue =
+      typeof bookingSyncStateApi.getFlushableQueueOperations === 'function'
+        ? bookingSyncStateApi.getFlushableQueueOperations(queue)
+        : queue.filter((entry) => entry.status !== 'failed');
+    if (!flushableQueue.length) {
       updateSyncBanner();
       return;
     }
 
-    for (const entry of queue) {
+    for (const entry of flushableQueue) {
       updateBookingOperation(entry.opId, {
         status: 'syncing',
         lastError: '',
@@ -1361,7 +1366,7 @@ async function flushBookingOpsQueue() {
             updatedAt: new Date().toISOString()
           });
         }
-        break;
+        continue;
       }
 
       if (hasBookingOperation(entry.opId)) {

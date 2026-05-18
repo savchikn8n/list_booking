@@ -83,6 +83,10 @@
     return (queue || []).map(normalizeQueueOperation);
   }
 
+  function getFlushableQueueOperations(queue) {
+    return (queue || []).filter((entry) => entry?.status !== 'failed');
+  }
+
   function toDatabaseBookingPayload(booking) {
     if (!booking) return {};
 
@@ -150,6 +154,7 @@
     getBlockingBookingIds,
     getUnsyncedBookingIds,
     createBookingEventPayload,
+    getFlushableQueueOperations,
     recoverQueueFromSnapshot,
     normalizeQueueOperations,
     removeQueueOperation,
