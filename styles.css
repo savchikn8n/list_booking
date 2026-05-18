@@ -825,7 +825,7 @@ body {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1fr) minmax(0, 1.2fr);
   gap: 12px;
 }
 
@@ -842,6 +842,10 @@ body {
 .debug-panel-header {
   padding: 12px 14px;
   border-bottom: 1px solid rgba(95, 90, 83, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .debug-panel-header h2 {

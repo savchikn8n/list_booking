@@ -88,8 +88,10 @@ const waitlistNameInput = document.getElementById('waitlist-name');
 const waitlistPhoneInput = document.getElementById('waitlist-phone');
 const waitlistCommentInput = document.getElementById('waitlist-comment');
 const waitlistItems = document.getElementById('waitlist-items');
+const debugLocalQueue = document.getElementById('debug-local-queue');
 const debugDeletedBookings = document.getElementById('debug-deleted-bookings');
 const debugEvents = document.getElementById('debug-events');
+const debugSyncRetryBtn = document.getElementById('debug-sync-retry');
 
 const paletteButtons = Array.from(document.querySelectorAll('.palette-btn'));
 
@@ -122,12 +124,16 @@ const BOOKING_RESTORE_THROTTLE_MS = 1500;
 const BOOKING_DEVICE_HEARTBEAT_INTERVAL_MS = 30000;
 const BOOKING_APP_VERSION = '2026-05-18-sync-hardening';
 const IS_DEBUG_MODE = new URLSearchParams(window.location.search).get('debug') === '1';
+const INITIAL_VIEW =
+  IS_DEBUG_MODE && new URLSearchParams(window.location.search).get('view') === 'debug'
+    ? 'debug'
+    : 'bookings';
 
 let selectedDate = getLocalISODate();
 let scheduleEndMinutes = getScheduleEndMinutes(selectedDate);
 let timeSlots = buildTimeSlots(scheduleEndMinutes);
 let currentTheme = 'yellow';
-let currentView = 'bookings';
+let currentView = INITIAL_VIEW;
 
 let modalMode = 'create';
 let editingBookingId = null;
@@ -1367,6 +1373,23 @@ async function refreshSelectedDateData() {
   await loadBookingsFromDatabase(date);
 }
 
+async function retryDebugSyncNow() {
+  if (!IS_DEBUG_MODE) return;
+
+  debugSyncRetryBtn.disabled = true;
+  debugSyncRetryBtn.textContent = 'Жму...';
+  try {
+    recoverOpsQueueFromAllSnapshots();
+    await flushBookingOpsQueue();
+    await loadBookingsFromDatabase(selectedDate);
+    await loadDebugDataFromDatabase(selectedDate);
+    renderDebugView();
+  } finally {
+    debugSyncRetryBtn.disabled = false;
+    debugSyncRetryBtn.textContent = 'Дожать';
+  }
+}
+
 function applyBookingRealtimePayload(payload) {
   lastRealtimeEventAt = new Date();
   console.info('Supabase bookings realtime payload:', payload);
@@ -1503,6 +1526,7 @@ async function bootstrapBookingsSync() {
   await flushBookingOpsQueue();
   await loadBookingsFromDatabase();
   await loadWaitlistFromDatabase();
+  setCurrentView(currentView);
   void saveDeviceStateToDatabase();
 }
 
@@ -2104,8 +2128,54 @@ function getDebugEventLabel(eventType) {
 function renderDebugView() {
   if (!IS_DEBUG_MODE) return;
 
+  debugLocalQueue.innerHTML = '';
   debugDeletedBookings.innerHTML = '';
   debugEvents.innerHTML = '';
+  const queue = getOpsQueue();
+  const snapshot = getStoredSnapshot(selectedDate);
+
+  if (queue.length === 0) {
+    const emptyQueue = document.createElement('div');
+    emptyQueue.className = 'debug-empty';
+    emptyQueue.textContent = snapshot?.bookings?.length
+      ? `Очередь пуста. Локальный слепок: ${snapshot.bookings.length} броней.`
+      : 'Очередь пуста. Локального слепка на эту дату нет.';
+    debugLocalQueue.append(emptyQueue);
+  } else {
+    queue.forEach((entry) => {
+      const card = document.createElement('article');
+      card.className = 'debug-card';
+
+      const content = document.createElement('div');
+
+      const title = document.createElement('div');
+      title.className = 'debug-title';
+      title.textContent = `${entry.type || 'operation'} · ${entry.status || 'pending'}`;
+      content.append(title);
+
+      const meta = document.createElement('div');
+      meta.className = 'debug-meta';
+      meta.textContent = [
+        entry.date || '-',
+        entry.payload?.name || entry.payload?.guest_name || entry.bookingId || '-',
+        `retry ${Number(entry.retryCount) || 0}`
+      ].join(' · ');
+      content.append(meta);
+
+      const comment = document.createElement('div');
+      comment.className = 'debug-comment';
+      comment.textContent = [
+        entry.updatedAt ? `updated ${formatDebugDateTime(entry.updatedAt)}` : '',
+        entry.eventId ? `event ${entry.eventId}` : 'legacy event'
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      content.append(comment);
+
+      card.append(content);
+      debugLocalQueue.append(card);
+    });
+  }
 
   if (debugDeletedBookingsCache.length === 0) {
     const emptyDeleted = document.createElement('div');
@@ -2337,6 +2407,10 @@ function initEvents() {
 
   debugViewBtn.addEventListener('click', () => {
     setCurrentView('debug');
+  });
+
+  debugSyncRetryBtn.addEventListener('click', () => {
+    void retryDebugSyncNow();
   });
 
   waitlistForm.addEventListener('submit', async (event) => {
