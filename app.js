@@ -221,6 +221,27 @@ function updateSyncIndicator(text, options = {}) {
   setSyncStatus(text, state);
 }
 
+async function runSupabaseRequest(request, label, timeoutMs = BOOKING_RPC_TIMEOUT_MS) {
+  const timeoutController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  let timeoutId = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      if (timeoutController) timeoutController.abort();
+      reject(new Error(`${label} timeout`));
+    }, timeoutMs);
+  });
+
+  try {
+    const requestWithAbort =
+      timeoutController && typeof request.abortSignal === 'function'
+        ? request.abortSignal(timeoutController.signal)
+        : request;
+    return await Promise.race([requestWithAbort, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 function getLocalISODate(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -985,15 +1006,26 @@ async function loadBookingsFromDatabase(date = selectedDate) {
 
   updateSyncIndicator('Загрузка броней...', { isBusy: true });
 
-  const { data, error } = await bookingDatabase
-    .from(BOOKINGS_TABLE)
-    .select(
-      'id, booking_date, table_index, time_index, start_minutes, duration_slots, guest_name, guest_phone, guest_comment, guests, color_theme, arrival_status, arrival_marked_at'
-    )
-    .eq('booking_date', date)
-    .is('deleted_at', null)
-    .order('table_index', { ascending: true })
-    .order('time_index', { ascending: true });
+  let data = [];
+  let error = null;
+  try {
+    const result = await runSupabaseRequest(
+      bookingDatabase
+        .from(BOOKINGS_TABLE)
+        .select(
+          'id, booking_date, table_index, time_index, start_minutes, duration_slots, guest_name, guest_phone, guest_comment, guests, color_theme, arrival_status, arrival_marked_at'
+        )
+        .eq('booking_date', date)
+        .is('deleted_at', null)
+        .order('table_index', { ascending: true })
+        .order('time_index', { ascending: true }),
+      'load bookings'
+    );
+    data = result.data || [];
+    error = result.error;
+  } catch (loadError) {
+    error = loadError;
+  }
 
   if (error) {
     console.error('Supabase load error:', error);
@@ -1050,22 +1082,28 @@ async function loadDebugDataFromDatabase(date = selectedDate) {
   }
 
   const [eventsResult, deletedResult] = await Promise.all([
-    bookingDatabase
-      .from(EVENTS_TABLE)
-      .select(
-        'event_id, booking_id, booking_date, event_type, payload, device_id, device_role, client_sequence, client_created_at, server_created_at, apply_status'
-      )
-      .eq('booking_date', date)
-      .order('server_created_at', { ascending: false })
-      .limit(80),
-    bookingDatabase
-      .from(BOOKINGS_TABLE)
-      .select(
-        'id, booking_date, table_index, time_index, start_minutes, duration_slots, guest_name, guest_phone, guest_comment, guests, color_theme, arrival_status, arrival_marked_at, deleted_at, deleted_by_device_id, deleted_by_event_id'
-      )
-      .eq('booking_date', date)
-      .not('deleted_at', 'is', null)
-      .order('deleted_at', { ascending: false })
+    runSupabaseRequest(
+      bookingDatabase
+        .from(EVENTS_TABLE)
+        .select(
+          'event_id, booking_id, booking_date, event_type, payload, device_id, device_role, client_sequence, client_created_at, server_created_at, apply_status'
+        )
+        .eq('booking_date', date)
+        .order('server_created_at', { ascending: false })
+        .limit(80),
+      'load debug events'
+    ).catch((error) => ({ data: null, error })),
+    runSupabaseRequest(
+      bookingDatabase
+        .from(BOOKINGS_TABLE)
+        .select(
+          'id, booking_date, table_index, time_index, start_minutes, duration_slots, guest_name, guest_phone, guest_comment, guests, color_theme, arrival_status, arrival_marked_at, deleted_at, deleted_by_device_id, deleted_by_event_id'
+        )
+        .eq('booking_date', date)
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false }),
+      'load deleted bookings'
+    ).catch((error) => ({ data: null, error }))
   ]);
 
   if (eventsResult.error) {
@@ -1147,10 +1185,17 @@ async function upsertBookingOnServer(booking) {
   if (!bookingDatabase) {
     return { ok: false, error: new Error('Supabase unavailable') };
   }
-  const { error } = await bookingDatabase
-    .from(BOOKINGS_TABLE)
-    .upsert(serializeBookingForDatabase(booking), { onConflict: 'id' });
-  return { ok: !error, error };
+  try {
+    const { error } = await runSupabaseRequest(
+      bookingDatabase
+        .from(BOOKINGS_TABLE)
+        .upsert(serializeBookingForDatabase(booking), { onConflict: 'id' }),
+      'direct booking upsert'
+    );
+    return { ok: !error, error };
+  } catch (error) {
+    return { ok: false, error };
+  }
 }
 
 async function applyBookingOperationOnServer(entry) {
@@ -1174,31 +1219,17 @@ async function applyBookingOperationOnServer(entry) {
     return { ok: false, error: new Error('Booking event payload unavailable') };
   }
 
-  const timeoutController = new AbortController();
-  const timeoutId = setTimeout(() => {
-    timeoutController.abort();
-  }, BOOKING_RPC_TIMEOUT_MS);
-
   try {
-    const rpcRequest = bookingDatabase.rpc('booking_sheet_apply_event', {
-      event_payload: eventPayload
-    });
-    const requestWithTimeout =
-      typeof rpcRequest.abortSignal === 'function'
-        ? rpcRequest.abortSignal(timeoutController.signal)
-        : Promise.race([
-            rpcRequest,
-            new Promise((_, reject) => {
-              setTimeout(() => reject(new Error('Supabase RPC timeout')), BOOKING_RPC_TIMEOUT_MS);
-            })
-          ]);
-    const { error } = await requestWithTimeout;
+    const { error } = await runSupabaseRequest(
+      bookingDatabase.rpc('booking_sheet_apply_event', {
+        event_payload: eventPayload
+      }),
+      'booking event rpc'
+    );
 
     return { ok: !error, error };
   } catch (error) {
     return { ok: false, error };
-  } finally {
-    clearTimeout(timeoutId);
   }
 }
 
@@ -1500,8 +1531,22 @@ async function retryDebugSyncNow() {
   try {
     recoverOpsQueueFromAllSnapshots();
     await flushBookingOpsQueue();
-    await loadBookingsFromDatabase(selectedDate);
-    await loadDebugDataFromDatabase(selectedDate);
+    await Promise.race([
+      loadBookingsFromDatabase(selectedDate),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('refresh bookings timeout')), BOOKING_RPC_TIMEOUT_MS);
+      })
+    ]).catch((error) => {
+      console.error('Debug retry bookings refresh error:', error);
+    });
+    await Promise.race([
+      loadDebugDataFromDatabase(selectedDate),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('refresh debug timeout')), BOOKING_RPC_TIMEOUT_MS);
+      })
+    ]).catch((error) => {
+      console.error('Debug retry panel refresh error:', error);
+    });
     renderDebugView();
   } finally {
     debugSyncRetryBtn.disabled = false;
