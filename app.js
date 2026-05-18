@@ -1202,6 +1202,32 @@ async function applyBookingOperationOnServer(entry) {
   }
 }
 
+function canFallbackToDirectUpsert(entry) {
+  if (typeof bookingSyncStateApi.canFallbackToDirectUpsert === 'function') {
+    return bookingSyncStateApi.canFallbackToDirectUpsert(entry);
+  }
+
+  return Boolean(entry?.payload?.id && !['delete', 'restore'].includes(entry.type));
+}
+
+async function rescueBookingOperationWithDirectUpsert(entry, originalError) {
+  if (!canFallbackToDirectUpsert(entry)) {
+    return { ok: false, error: originalError };
+  }
+
+  const upsertResult = await upsertBookingOnServer(entry.payload);
+  if (!upsertResult.ok) {
+    return {
+      ok: false,
+      error: new Error(
+        `RPC: ${getErrorMessage(originalError)} | direct upsert: ${getErrorMessage(upsertResult.error)}`
+      )
+    };
+  }
+
+  return { ok: true, rescued: true };
+}
+
 async function saveThemeToDatabase(themeName) {
   if (!bookingDatabase || !THEMES[themeName]) return;
 
@@ -1355,6 +1381,15 @@ async function flushBookingOpsQueue() {
       const applyResult = await applyBookingOperationOnServer(entry);
       if (!applyResult.ok) {
         console.error('Supabase booking event apply error:', applyResult.error);
+        const rescueResult = await rescueBookingOperationWithDirectUpsert(entry, applyResult.error);
+        if (rescueResult.ok) {
+          if (hasBookingOperation(entry.opId)) {
+            applyLocalBookingUpsert(entry.payload, 'synced');
+            removeBookingOperation(entry.opId);
+          }
+          continue;
+        }
+
         if (hasBookingOperation(entry.opId)) {
           if (entry.type !== 'delete') {
             applyLocalBookingUpsert(entry.payload, 'failed');
@@ -1362,7 +1397,7 @@ async function flushBookingOpsQueue() {
           updateBookingOperation(entry.opId, {
             status: 'failed',
             retryCount: (Number(entry.retryCount) || 0) + 1,
-            lastError: getErrorMessage(applyResult.error),
+            lastError: getErrorMessage(rescueResult.error),
             updatedAt: new Date().toISOString()
           });
         }

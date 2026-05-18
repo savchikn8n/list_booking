@@ -87,6 +87,11 @@
     return (queue || []).filter((entry) => entry?.status !== 'failed');
   }
 
+  function canFallbackToDirectUpsert(entry) {
+    if (!entry?.payload?.id) return false;
+    return !['delete', 'restore'].includes(entry.type);
+  }
+
   function toDatabaseBookingPayload(booking) {
     if (!booking) return {};
 
@@ -153,6 +158,7 @@
   return {
     getBlockingBookingIds,
     getUnsyncedBookingIds,
+    canFallbackToDirectUpsert,
     createBookingEventPayload,
     getFlushableQueueOperations,
     recoverQueueFromSnapshot,

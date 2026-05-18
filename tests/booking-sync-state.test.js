@@ -2,6 +2,7 @@ const assert = require('assert');
 const {
   getBlockingBookingIds,
   getUnsyncedBookingIds,
+  canFallbackToDirectUpsert,
   createBookingEventPayload,
   getFlushableQueueOperations,
   normalizeQueueOperations,
@@ -106,6 +107,11 @@ assert.deepStrictEqual(
   flushableQueue.map((entry) => entry.opId),
   ['pending-second', 'syncing-third']
 );
+
+assert.strictEqual(canFallbackToDirectUpsert({ type: 'upsert', payload: { id: 'booking-1' } }), true);
+assert.strictEqual(canFallbackToDirectUpsert({ type: 'create', payload: { id: 'booking-1' } }), true);
+assert.strictEqual(canFallbackToDirectUpsert({ type: 'delete', payload: { id: 'booking-1' } }), false);
+assert.strictEqual(canFallbackToDirectUpsert({ type: 'upsert', payload: null }), false);
 
 const eventPayload = createBookingEventPayload({
   entry: {
