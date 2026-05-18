@@ -5,6 +5,7 @@ const {
   canFallbackToDirectUpsert,
   createBookingEventPayload,
   getFlushableQueueOperations,
+  getOverlappingBookings,
   normalizeQueueOperations,
   recoverQueueFromSnapshot,
   hasQueueOperation,
@@ -112,6 +113,22 @@ assert.strictEqual(canFallbackToDirectUpsert({ type: 'upsert', payload: { id: 'b
 assert.strictEqual(canFallbackToDirectUpsert({ type: 'create', payload: { id: 'booking-1' } }), true);
 assert.strictEqual(canFallbackToDirectUpsert({ type: 'delete', payload: { id: 'booking-1' } }), false);
 assert.strictEqual(canFallbackToDirectUpsert({ type: 'upsert', payload: null }), false);
+
+const overlappingBookings = getOverlappingBookings(
+  { id: 'target', tableIndex: 2, timeIndex: 4, durationSlots: 3 },
+  [
+    { id: 'target', tableIndex: 2, timeIndex: 4, durationSlots: 3 },
+    { id: 'before', tableIndex: 2, timeIndex: 1, durationSlots: 3 },
+    { id: 'overlap-left', tableIndex: 2, timeIndex: 3, durationSlots: 2 },
+    { id: 'overlap-right', tableIndex: 2, timeIndex: 6, durationSlots: 2 },
+    { id: 'different-table', tableIndex: 3, timeIndex: 4, durationSlots: 3 }
+  ]
+);
+
+assert.deepStrictEqual(
+  overlappingBookings.map((booking) => booking.id),
+  ['overlap-left', 'overlap-right']
+);
 
 const eventPayload = createBookingEventPayload({
   entry: {

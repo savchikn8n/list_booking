@@ -1241,6 +1241,52 @@ function canFallbackToDirectUpsert(entry) {
   return Boolean(entry?.payload?.id && !['delete', 'restore'].includes(entry.type));
 }
 
+function isOverlapConstraintError(error) {
+  const message = getErrorMessage(error);
+  return message.includes('exclusion constraint') || message.includes('no_overlap');
+}
+
+function formatBookingConflict(booking) {
+  const startMinutes = Number(booking.start_minutes ?? booking.startMinutes);
+  const durationSlots = Number(booking.duration_slots ?? booking.durationSlots) || 1;
+  const endMinutes = Number.isFinite(startMinutes)
+    ? startMinutes + durationSlots * STEP_MINUTES
+    : null;
+  const timeLabel =
+    Number.isFinite(startMinutes) && Number.isFinite(endMinutes)
+      ? `${minutesToLabel(startMinutes)}-${minutesToLabel(endMinutes)}`
+      : `slot ${booking.time_index ?? booking.timeIndex}`;
+
+  return `${booking.guest_name ?? booking.name ?? 'Гость'} · стол ${getTableLabel(Number(booking.table_index ?? booking.tableIndex))} · ${timeLabel}`;
+}
+
+async function getBookingConflictDetails(booking) {
+  if (!bookingDatabase || !booking?.date) return '';
+
+  const { data, error } = await runSupabaseRequest(
+    bookingDatabase
+      .from(BOOKINGS_TABLE)
+      .select(
+        'id, booking_date, table_index, time_index, start_minutes, duration_slots, guest_name, guest_phone, guest_comment'
+      )
+      .eq('booking_date', booking.date)
+      .is('deleted_at', null)
+      .order('table_index', { ascending: true })
+      .order('time_index', { ascending: true }),
+    'load conflict bookings'
+  );
+
+  if (error) return '';
+
+  const overlappingBookings =
+    typeof bookingSyncStateApi.getOverlappingBookings === 'function'
+      ? bookingSyncStateApi.getOverlappingBookings(booking, data || [])
+      : [];
+
+  if (!overlappingBookings.length) return '';
+  return ` | conflict with: ${overlappingBookings.map(formatBookingConflict).join('; ')}`;
+}
+
 async function rescueBookingOperationWithDirectUpsert(entry, originalError) {
   if (!canFallbackToDirectUpsert(entry)) {
     return { ok: false, error: originalError };
@@ -1248,10 +1294,13 @@ async function rescueBookingOperationWithDirectUpsert(entry, originalError) {
 
   const upsertResult = await upsertBookingOnServer(entry.payload);
   if (!upsertResult.ok) {
+    const conflictDetails = isOverlapConstraintError(upsertResult.error)
+      ? await getBookingConflictDetails(entry.payload).catch(() => '')
+      : '';
     return {
       ok: false,
       error: new Error(
-        `RPC: ${getErrorMessage(originalError)} | direct upsert: ${getErrorMessage(upsertResult.error)}`
+        `RPC: ${getErrorMessage(originalError)} | direct upsert: ${getErrorMessage(upsertResult.error)}${conflictDetails}`
       )
     };
   }
@@ -2319,11 +2368,23 @@ function renderDebugView() {
 
       const meta = document.createElement('div');
       meta.className = 'debug-meta';
+      const tableIndex = entry.payload?.tableIndex ?? entry.payload?.table_index;
+      const startMinutes = entry.payload?.startMinutes ?? entry.payload?.start_minutes;
+      const tableLabel = Number.isFinite(Number(tableIndex))
+        ? `стол ${getTableLabel(Number(tableIndex))}`
+        : '';
+      const timeLabel = Number.isFinite(Number(startMinutes))
+        ? minutesToLabel(Number(startMinutes))
+        : '';
       meta.textContent = [
         entry.date || '-',
         entry.payload?.name || entry.payload?.guest_name || entry.bookingId || '-',
+        tableLabel,
+        timeLabel,
         `retry ${Number(entry.retryCount) || 0}`
-      ].join(' · ');
+      ]
+        .filter(Boolean)
+        .join(' · ');
       content.append(meta);
 
       const comment = document.createElement('div');

@@ -92,6 +92,43 @@
     return !['delete', 'restore'].includes(entry.type);
   }
 
+  function getBookingTableIndex(booking) {
+    return Number(booking?.table_index ?? booking?.tableIndex);
+  }
+
+  function getBookingTimeIndex(booking) {
+    return Number(booking?.time_index ?? booking?.timeIndex);
+  }
+
+  function getBookingDurationSlots(booking) {
+    return Number(booking?.duration_slots ?? booking?.durationSlots);
+  }
+
+  function getOverlappingBookings(booking, bookings) {
+    const tableIndex = getBookingTableIndex(booking);
+    const startIndex = getBookingTimeIndex(booking);
+    const durationSlots = getBookingDurationSlots(booking);
+    const endIndex = startIndex + durationSlots;
+
+    if (
+      !booking?.id ||
+      !Number.isFinite(tableIndex) ||
+      !Number.isFinite(startIndex) ||
+      !Number.isFinite(durationSlots)
+    ) {
+      return [];
+    }
+
+    return (bookings || []).filter((candidate) => {
+      if (!candidate || candidate.id === booking.id) return false;
+      if (getBookingTableIndex(candidate) !== tableIndex) return false;
+
+      const candidateStart = getBookingTimeIndex(candidate);
+      const candidateEnd = candidateStart + getBookingDurationSlots(candidate);
+      return startIndex < candidateEnd && endIndex > candidateStart;
+    });
+  }
+
   function toDatabaseBookingPayload(booking) {
     if (!booking) return {};
 
@@ -161,6 +198,7 @@
     canFallbackToDirectUpsert,
     createBookingEventPayload,
     getFlushableQueueOperations,
+    getOverlappingBookings,
     recoverQueueFromSnapshot,
     normalizeQueueOperations,
     removeQueueOperation,
