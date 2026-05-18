@@ -1,0 +1,2 @@
+-- Remote migration already applied before this repository had local Supabase migrations.
+-- Kept as a local placeholder so Supabase CLI migration history matches the linked project.

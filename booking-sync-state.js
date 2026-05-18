@@ -44,9 +44,94 @@
     return nextQueue;
   }
 
+  function removeQueueOperation(queue, opId) {
+    return (queue || []).filter((entry) => entry?.opId !== opId);
+  }
+
+  function updateQueueOperation(queue, opId, operationPatch) {
+    return (queue || []).map((entry) => {
+      if (entry?.opId !== opId) return entry;
+      return {
+        ...entry,
+        ...operationPatch
+      };
+    });
+  }
+
+  function hasQueueOperation(queue, opId) {
+    return (queue || []).some((entry) => entry?.opId === opId);
+  }
+
+  function toDatabaseBookingPayload(booking) {
+    if (!booking) return {};
+
+    return {
+      id: booking.id,
+      booking_date: booking.booking_date || booking.date,
+      table_index: booking.table_index ?? booking.tableIndex,
+      time_index: booking.time_index ?? booking.timeIndex,
+      start_minutes: booking.start_minutes ?? booking.startMinutes,
+      duration_slots: booking.duration_slots ?? booking.durationSlots,
+      guest_name: booking.guest_name ?? booking.name ?? '',
+      guest_phone: booking.guest_phone ?? booking.phone ?? '',
+      guest_comment: booking.guest_comment ?? booking.comment ?? '',
+      guests: booking.guests ?? 1,
+      color_theme: booking.color_theme ?? booking.colorTheme ?? 'yellow',
+      arrival_status: booking.arrival_status ?? booking.arrivalStatus ?? 'pending',
+      arrival_marked_at: booking.arrival_marked_at ?? booking.arrivalMarkedAt ?? null
+    };
+  }
+
+  function getBookingEventType(entry) {
+    if (entry?.type === 'delete') return 'booking_deleted';
+    if (entry?.type === 'restore') return 'booking_restored';
+    if (entry?.type === 'arrival') return 'arrival_toggled';
+    if (entry?.type === 'create') return 'booking_created';
+    return 'booking_updated';
+  }
+
+  function createBookingEventPayload({
+    entry,
+    deviceId,
+    deviceRole,
+    clientSequence,
+    clientCreatedAt
+  }) {
+    const eventType = getBookingEventType(entry);
+    const bookingPayload = toDatabaseBookingPayload(entry?.payload || {});
+
+    if (!bookingPayload.id && entry?.bookingId) {
+      bookingPayload.id = entry.bookingId;
+    }
+
+    if (!bookingPayload.booking_date && entry?.date) {
+      bookingPayload.booking_date = entry.date;
+    }
+
+    if (eventType === 'booking_deleted') {
+      bookingPayload.deleted_at = clientCreatedAt;
+    }
+
+    return {
+      event_id: entry.eventId,
+      booking_id: entry.bookingId || bookingPayload.id,
+      booking_date: entry.date || bookingPayload.booking_date,
+      event_type: eventType,
+      payload: bookingPayload,
+      device_id: deviceId,
+      device_role: deviceRole,
+      client_sequence: clientSequence,
+      client_created_at: clientCreatedAt
+    };
+  }
+
   return {
     getBlockingBookingIds,
     getUnsyncedBookingIds,
-    recoverQueueFromSnapshot
+    createBookingEventPayload,
+    recoverQueueFromSnapshot,
+    removeQueueOperation,
+    updateQueueOperation,
+    hasQueueOperation
   };
 });

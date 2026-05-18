@@ -1,0 +1,293 @@
+create or replace function public.booking_sheet_apply_event(event_payload jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_event_id uuid;
+  v_booking_id uuid;
+  v_booking_date date;
+  v_event_type text;
+  v_payload jsonb;
+  v_device_id text;
+  v_device_role text;
+  v_client_sequence bigint;
+  v_client_created_at timestamptz;
+  v_inserted_count integer := 0;
+  v_deleted_update_count integer := 0;
+  v_is_superseded boolean := false;
+begin
+  v_event_id := (event_payload->>'event_id')::uuid;
+  v_payload := coalesce(event_payload->'payload', '{}'::jsonb);
+  v_booking_id := coalesce((event_payload->>'booking_id')::uuid, (v_payload->>'id')::uuid);
+  v_booking_date := coalesce(
+    (event_payload->>'booking_date')::date,
+    (v_payload->>'booking_date')::date
+  );
+  v_event_type := event_payload->>'event_type';
+  v_device_id := coalesce(nullif(event_payload->>'device_id', ''), 'unknown');
+  v_device_role := coalesce(nullif(event_payload->>'device_role', ''), 'unknown');
+  v_client_sequence := nullif(event_payload->>'client_sequence', '')::bigint;
+  v_client_created_at := nullif(event_payload->>'client_created_at', '')::timestamptz;
+
+  if v_event_id is null then
+    raise exception 'booking_sheet_apply_event requires event_id';
+  end if;
+
+  if v_event_type is null then
+    raise exception 'booking_sheet_apply_event requires event_type';
+  end if;
+
+  insert into public.booking_sheet_events (
+    event_id,
+    booking_id,
+    booking_date,
+    event_type,
+    payload,
+    device_id,
+    device_role,
+    client_sequence,
+    client_created_at,
+    applied_at
+  )
+  values (
+    v_event_id,
+    v_booking_id,
+    v_booking_date,
+    v_event_type,
+    v_payload,
+    v_device_id,
+    v_device_role,
+    v_client_sequence,
+    v_client_created_at,
+    now()
+  )
+  on conflict (event_id) do nothing;
+
+  get diagnostics v_inserted_count = row_count;
+
+  if v_inserted_count = 0 then
+    update public.booking_sheet_events
+    set apply_status = 'duplicate'
+    where event_id = v_event_id;
+
+    return jsonb_build_object(
+      'ok', true,
+      'duplicate', true,
+      'event_id', v_event_id
+    );
+  end if;
+
+  if v_booking_id is null and v_event_type like 'booking_%' then
+    raise exception 'booking event requires booking_id';
+  end if;
+
+  if v_client_sequence is not null then
+    select exists (
+      select 1
+      from public.booking_sheet_events newer_event
+      where newer_event.booking_id = v_booking_id
+        and newer_event.device_id = v_device_id
+        and newer_event.client_sequence is not null
+        and newer_event.client_sequence > v_client_sequence
+    )
+    into v_is_superseded;
+  end if;
+
+  if v_is_superseded then
+    update public.booking_sheet_events
+    set apply_status = 'superseded'
+    where event_id = v_event_id;
+
+    return jsonb_build_object(
+      'ok', true,
+      'superseded', true,
+      'event_id', v_event_id
+    );
+  end if;
+
+  if v_event_type in ('booking_created', 'booking_updated', 'booking_restored', 'arrival_toggled') then
+    insert into public.booking_sheet_bookings (
+      id,
+      booking_date,
+      table_index,
+      time_index,
+      start_minutes,
+      duration_slots,
+      guest_name,
+      guest_phone,
+      guest_comment,
+      guests,
+      color_theme,
+      arrival_status,
+      arrival_marked_at,
+      deleted_at,
+      deleted_by_device_id,
+      deleted_by_event_id,
+      source_device_id,
+      source_device_role,
+      last_event_id,
+      last_event_device_id,
+      last_event_client_sequence,
+      client_updated_at
+    )
+    values (
+      v_booking_id,
+      v_booking_date,
+      (v_payload->>'table_index')::smallint,
+      (v_payload->>'time_index')::smallint,
+      (v_payload->>'start_minutes')::smallint,
+      (v_payload->>'duration_slots')::smallint,
+      coalesce(v_payload->>'guest_name', ''),
+      coalesce(v_payload->>'guest_phone', ''),
+      coalesce(v_payload->>'guest_comment', ''),
+      coalesce((v_payload->>'guests')::smallint, 1),
+      coalesce(v_payload->>'color_theme', 'yellow'),
+      coalesce(v_payload->>'arrival_status', 'pending'),
+      nullif(v_payload->>'arrival_marked_at', '')::timestamptz,
+      case when v_event_type = 'booking_restored' then null else nullif(v_payload->>'deleted_at', '')::timestamptz end,
+      nullif(v_payload->>'deleted_by_device_id', ''),
+      nullif(v_payload->>'deleted_by_event_id', '')::uuid,
+      v_device_id,
+      v_device_role,
+      v_event_id,
+      v_device_id,
+      v_client_sequence,
+      v_client_created_at
+    )
+    on conflict (id) do update
+    set
+      booking_date = excluded.booking_date,
+      table_index = excluded.table_index,
+      time_index = excluded.time_index,
+      start_minutes = excluded.start_minutes,
+      duration_slots = excluded.duration_slots,
+      guest_name = excluded.guest_name,
+      guest_phone = excluded.guest_phone,
+      guest_comment = excluded.guest_comment,
+      guests = excluded.guests,
+      color_theme = excluded.color_theme,
+      arrival_status = excluded.arrival_status,
+      arrival_marked_at = excluded.arrival_marked_at,
+      deleted_at = case when v_event_type = 'booking_restored' then null else excluded.deleted_at end,
+      deleted_by_device_id = case when v_event_type = 'booking_restored' then null else excluded.deleted_by_device_id end,
+      deleted_by_event_id = case when v_event_type = 'booking_restored' then null else excluded.deleted_by_event_id end,
+      source_device_id = coalesce(public.booking_sheet_bookings.source_device_id, excluded.source_device_id),
+      source_device_role = coalesce(public.booking_sheet_bookings.source_device_role, excluded.source_device_role),
+      last_event_id = excluded.last_event_id,
+      last_event_device_id = excluded.last_event_device_id,
+      last_event_client_sequence = excluded.last_event_client_sequence,
+      client_updated_at = excluded.client_updated_at
+    where public.booking_sheet_bookings.last_event_client_sequence is null
+       or excluded.last_event_client_sequence is null
+       or excluded.last_event_device_id is distinct from public.booking_sheet_bookings.last_event_device_id
+       or excluded.last_event_client_sequence >= public.booking_sheet_bookings.last_event_client_sequence;
+
+    return jsonb_build_object(
+      'ok', true,
+      'event_id', v_event_id,
+      'booking_id', v_booking_id,
+      'event_type', v_event_type
+    );
+  end if;
+
+  if v_event_type = 'booking_deleted' then
+    update public.booking_sheet_bookings
+    set
+      deleted_at = coalesce(nullif(v_payload->>'deleted_at', '')::timestamptz, now()),
+      deleted_by_device_id = v_device_id,
+      deleted_by_event_id = v_event_id,
+      last_event_id = v_event_id,
+      last_event_device_id = v_device_id,
+      last_event_client_sequence = v_client_sequence,
+      client_updated_at = v_client_created_at
+    where id = v_booking_id
+      and (
+        last_event_client_sequence is null
+        or v_client_sequence is null
+        or last_event_device_id is distinct from v_device_id
+        or v_client_sequence >= last_event_client_sequence
+      );
+
+    get diagnostics v_deleted_update_count = row_count;
+
+    if v_deleted_update_count = 0
+      and v_payload ? 'table_index'
+      and v_payload ? 'time_index'
+      and v_payload ? 'start_minutes'
+      and v_payload ? 'duration_slots'
+    then
+      insert into public.booking_sheet_bookings (
+        id,
+        booking_date,
+        table_index,
+        time_index,
+        start_minutes,
+        duration_slots,
+        guest_name,
+        guest_phone,
+        guest_comment,
+        guests,
+        color_theme,
+        arrival_status,
+        arrival_marked_at,
+        deleted_at,
+        deleted_by_device_id,
+        deleted_by_event_id,
+        source_device_id,
+        source_device_role,
+        last_event_id,
+        last_event_device_id,
+        last_event_client_sequence,
+        client_updated_at
+      )
+      values (
+        v_booking_id,
+        v_booking_date,
+        (v_payload->>'table_index')::smallint,
+        (v_payload->>'time_index')::smallint,
+        (v_payload->>'start_minutes')::smallint,
+        (v_payload->>'duration_slots')::smallint,
+        coalesce(v_payload->>'guest_name', ''),
+        coalesce(v_payload->>'guest_phone', ''),
+        coalesce(v_payload->>'guest_comment', ''),
+        coalesce((v_payload->>'guests')::smallint, 1),
+        coalesce(v_payload->>'color_theme', 'yellow'),
+        coalesce(v_payload->>'arrival_status', 'pending'),
+        nullif(v_payload->>'arrival_marked_at', '')::timestamptz,
+        coalesce(nullif(v_payload->>'deleted_at', '')::timestamptz, now()),
+        v_device_id,
+        v_event_id,
+        v_device_id,
+        v_device_role,
+        v_event_id,
+        v_device_id,
+        v_client_sequence,
+        v_client_created_at
+      )
+      on conflict (id) do nothing;
+    end if;
+
+    return jsonb_build_object(
+      'ok', true,
+      'event_id', v_event_id,
+      'booking_id', v_booking_id,
+      'event_type', v_event_type
+    );
+  end if;
+
+  update public.booking_sheet_events
+  set apply_status = 'logged'
+  where event_id = v_event_id;
+
+  return jsonb_build_object(
+    'ok', true,
+    'logged', true,
+    'event_id', v_event_id,
+    'event_type', v_event_type
+  );
+end;
+$$;
+
+grant execute on function public.booking_sheet_apply_event(jsonb) to anon;

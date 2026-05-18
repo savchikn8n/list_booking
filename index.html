@@ -29,6 +29,9 @@
               <button type="button" id="waitlist-view-btn" class="view-menu-btn">
                 Лист ожидания
               </button>
+              <button type="button" id="debug-view-btn" class="view-menu-btn hidden">
+                История
+              </button>
             </div>
           </details>
         </div>
@@ -97,6 +100,22 @@
         </form>
 
         <div id="waitlist-items" class="waitlist-items" aria-label="Лист ожидания"></div>
+      </section>
+
+      <section id="debug-view" class="debug-view hidden" aria-label="История синхронизации">
+        <div class="debug-panel">
+          <div class="debug-panel-header">
+            <h2>Удаленные брони</h2>
+          </div>
+          <div id="debug-deleted-bookings" class="debug-list"></div>
+        </div>
+
+        <div class="debug-panel">
+          <div class="debug-panel-header">
+            <h2>События</h2>
+          </div>
+          <div id="debug-events" class="debug-list"></div>
+        </div>
       </section>
     </div>
 
@@ -179,6 +198,7 @@
     <script src="./booking-sync-indicator.js"></script>
     <script src="./booking-extension.js"></script>
     <script src="./booking-visual-state.js"></script>
+    <script src="./booking-local-storage.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

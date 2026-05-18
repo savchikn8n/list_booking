@@ -41,9 +41,11 @@ const KALININGRAD_TIMEZONE = 'Europe/Kaliningrad';
 const board = document.getElementById('booking-board');
 const bookingsView = document.getElementById('bookings-view');
 const waitlistView = document.getElementById('waitlist-view');
+const debugView = document.getElementById('debug-view');
 const viewMenu = document.getElementById('view-menu');
 const bookingsViewBtn = document.getElementById('bookings-view-btn');
 const waitlistViewBtn = document.getElementById('waitlist-view-btn');
+const debugViewBtn = document.getElementById('debug-view-btn');
 const pageTitleLabel = document.getElementById('page-title-label');
 const nowIndicator = document.getElementById('now-indicator');
 const nowLine = document.getElementById('now-line');
@@ -86,6 +88,8 @@ const waitlistNameInput = document.getElementById('waitlist-name');
 const waitlistPhoneInput = document.getElementById('waitlist-phone');
 const waitlistCommentInput = document.getElementById('waitlist-comment');
 const waitlistItems = document.getElementById('waitlist-items');
+const debugDeletedBookings = document.getElementById('debug-deleted-bookings');
+const debugEvents = document.getElementById('debug-events');
 
 const paletteButtons = Array.from(document.querySelectorAll('.palette-btn'));
 
@@ -94,17 +98,30 @@ const SUPABASE_SETTINGS = window.BOOKING_SUPABASE_CONFIG || {};
 const BOOKINGS_TABLE = SUPABASE_SETTINGS.bookingsTable || 'booking_sheet_bookings';
 const WAITLIST_TABLE = SUPABASE_SETTINGS.waitlistTable || 'booking_sheet_waitlist';
 const META_TABLE = SUPABASE_SETTINGS.metaTable || 'booking_sheet_meta';
+const EVENTS_TABLE = 'booking_sheet_events';
+const DEVICE_STATE_TABLE = 'booking_sheet_device_state';
 const SNAPSHOT_STORAGE_PREFIX = 'booking_snapshot:';
 const OPS_QUEUE_STORAGE_KEY = 'booking_ops_queue';
 const SYNC_META_STORAGE_KEY = 'booking_sync_meta';
+const DEVICE_ID_STORAGE_KEY = 'booking_device_id';
+const DEVICE_ROLE_STORAGE_KEY = 'booking_device_role';
+const DEVICE_SEQUENCE_STORAGE_KEY = 'booking_device_sequence';
 const bookingDatabase = createBookingDatabaseClient();
 const bookingCardLayoutApi = window.bookingCardLayout || {};
 const bookingSyncStateApi = window.bookingSyncState || {};
 const bookingSyncIndicatorApi = window.bookingSyncIndicator || {};
 const bookingExtensionApi = window.bookingExtension || {};
 const bookingVisualStateApi = window.bookingVisualState || {};
+const bookingLocalStorageApi = window.bookingLocalStorage || {};
+const bookingLocalStore =
+  typeof bookingLocalStorageApi.createDefaultBookingLocalStorage === 'function'
+    ? bookingLocalStorageApi.createDefaultBookingLocalStorage(window)
+    : null;
 const BOOKING_SYNC_RETRY_INTERVAL_MS = 5000;
 const BOOKING_RESTORE_THROTTLE_MS = 1500;
+const BOOKING_DEVICE_HEARTBEAT_INTERVAL_MS = 30000;
+const BOOKING_APP_VERSION = '2026-05-18-sync-hardening';
+const IS_DEBUG_MODE = new URLSearchParams(window.location.search).get('debug') === '1';
 
 let selectedDate = getLocalISODate();
 let scheduleEndMinutes = getScheduleEndMinutes(selectedDate);
@@ -127,6 +144,8 @@ let isExtendMode = false;
 let selectedExtendBookingId = null;
 let lastLifecycleRestoreAt = 0;
 let hasRealtimeConnectionError = false;
+let debugDeletedBookingsCache = [];
+let debugEventsCache = [];
 
 const waitlistByDate = new Map();
 
@@ -350,8 +369,47 @@ function writeJsonStorage(key, value) {
   }
 }
 
+function getDeviceId() {
+  const storedDeviceId = readJsonStorage(DEVICE_ID_STORAGE_KEY, '');
+  if (storedDeviceId) return storedDeviceId;
+
+  const nextDeviceId = crypto.randomUUID();
+  writeJsonStorage(DEVICE_ID_STORAGE_KEY, nextDeviceId);
+  return nextDeviceId;
+}
+
+function getDeviceRole() {
+  const searchParams = new URLSearchParams(window.location.search);
+  const roleFromUrl = searchParams.get('deviceRole');
+  if (roleFromUrl) {
+    writeJsonStorage(DEVICE_ROLE_STORAGE_KEY, roleFromUrl);
+    return roleFromUrl;
+  }
+
+  return readJsonStorage(DEVICE_ROLE_STORAGE_KEY, 'primary_tablet');
+}
+
+function getNextClientSequence() {
+  const currentSequence = Number(readJsonStorage(DEVICE_SEQUENCE_STORAGE_KEY, 0)) || 0;
+  const nextSequence = currentSequence + 1;
+  writeJsonStorage(DEVICE_SEQUENCE_STORAGE_KEY, nextSequence);
+  return nextSequence;
+}
+
 function getSnapshotStorageKey(date) {
   return `${SNAPSHOT_STORAGE_PREFIX}${date}`;
+}
+
+async function initializeBookingLocalStore() {
+  if (bookingLocalStore && typeof bookingLocalStore.init === 'function') {
+    await bookingLocalStore.init();
+  }
+}
+
+function flushBookingLocalStore() {
+  if (bookingLocalStore && typeof bookingLocalStore.flush === 'function') {
+    void bookingLocalStore.flush();
+  }
 }
 
 function getBookingsForSelectedDate() {
@@ -383,17 +441,27 @@ function removeBookingFromCache(bookingId, bookingDate = null) {
   });
 }
 function getStoredSnapshot(date) {
+  if (bookingLocalStore && typeof bookingLocalStore.getSnapshot === 'function') {
+    return bookingLocalStore.getSnapshot(date);
+  }
+
   return readJsonStorage(getSnapshotStorageKey(date), null);
 }
 
 function storeSnapshot(date) {
   const bookings = Array.from(getBookingsForDate(date).values());
-  return writeJsonStorage(getSnapshotStorageKey(date), {
+  const snapshot = {
     date,
     bookings,
     lastFetchedAt: new Date().toISOString(),
     lastMutationAt: new Date().toISOString()
-  });
+  };
+
+  if (bookingLocalStore && typeof bookingLocalStore.setSnapshot === 'function') {
+    return bookingLocalStore.setSnapshot(date, snapshot);
+  }
+
+  return writeJsonStorage(getSnapshotStorageKey(date), snapshot);
 }
 
 function restoreSnapshot(date) {
@@ -412,27 +480,58 @@ function restoreSnapshot(date) {
 }
 
 function getOpsQueue() {
+  if (bookingLocalStore && typeof bookingLocalStore.getQueue === 'function') {
+    return bookingLocalStore.getQueue();
+  }
+
   return readJsonStorage(OPS_QUEUE_STORAGE_KEY, []);
 }
 
 function setOpsQueue(queue) {
+  if (bookingLocalStore && typeof bookingLocalStore.setQueue === 'function') {
+    return bookingLocalStore.setQueue(queue);
+  }
+
   return writeJsonStorage(OPS_QUEUE_STORAGE_KEY, queue);
 }
 
 function enqueueBookingOperation(type, booking) {
-  const queue = getOpsQueue().filter((entry) => entry.bookingId !== booking.id);
+  const queue = getOpsQueue();
   queue.push({
     opId: `${booking.id}:${type}:${Date.now()}`,
+    eventId: crypto.randomUUID(),
     type,
     bookingId: booking.id,
     date: booking.date,
     payload: booking,
+    deviceId: getDeviceId(),
+    deviceRole: getDeviceRole(),
+    clientSequence: getNextClientSequence(),
+    clientCreatedAt: new Date().toISOString(),
     status: 'pending',
     retryCount: 0,
     updatedAt: new Date().toISOString()
   });
   setOpsQueue(queue);
   updateSyncBanner();
+}
+
+function createImmediateBookingOperation(type, booking) {
+  return {
+    opId: `${booking.id}:${type}:${Date.now()}`,
+    eventId: crypto.randomUUID(),
+    type,
+    bookingId: booking.id,
+    date: booking.date,
+    payload: booking,
+    deviceId: getDeviceId(),
+    deviceRole: getDeviceRole(),
+    clientSequence: getNextClientSequence(),
+    clientCreatedAt: new Date().toISOString(),
+    status: 'syncing',
+    retryCount: 0,
+    updatedAt: new Date().toISOString()
+  };
 }
 
 function withSyncState(booking, syncState) {
@@ -467,18 +566,8 @@ function getPrimaryArrivalToggleOffset(durationSlots) {
 }
 
 function updateSyncBanner() {
-  const queue = getOpsQueue();
-  if (!queue.length) {
-    syncBanner.classList.add('hidden');
-    syncBanner.textContent = '';
-    return;
-  }
-
-  const failedCount = queue.filter((entry) => entry.status === 'failed').length;
-  syncBanner.classList.remove('hidden');
-  syncBanner.textContent = failedCount
-    ? `Не синхронизировано: ${failedCount}`
-    : `Синхронизация: ${queue.length}`;
+  syncBanner.classList.add('hidden');
+  syncBanner.textContent = '';
 }
 
 function updateArrivalToggleButton(booking) {
@@ -503,6 +592,11 @@ function updateArrivalToggleButton(booking) {
 }
 
 function updateSyncMeta(metaPatch) {
+  if (bookingLocalStore && typeof bookingLocalStore.patchMeta === 'function') {
+    bookingLocalStore.patchMeta(metaPatch);
+    return;
+  }
+
   const currentMeta = readJsonStorage(SYNC_META_STORAGE_KEY, {});
   writeJsonStorage(SYNC_META_STORAGE_KEY, {
     ...currentMeta,
@@ -515,6 +609,7 @@ function persistAllBookingSnapshots() {
     storeSnapshot(bookingDate);
   });
   updateSyncMeta({ activeDate: selectedDate, lastPersistedAt: new Date().toISOString() });
+  flushBookingLocalStore();
 }
 
 function recoverOpsQueueFromAllSnapshots() {
@@ -554,22 +649,78 @@ function recoverOpsQueueFromAllSnapshots() {
   }
 }
 
-function removeBookingOperation(bookingId) {
-  const queue = getOpsQueue().filter((entry) => entry.bookingId !== bookingId);
+function removeBookingOperation(opId) {
+  const queue =
+    typeof bookingSyncStateApi.removeQueueOperation === 'function'
+      ? bookingSyncStateApi.removeQueueOperation(getOpsQueue(), opId)
+      : getOpsQueue().filter((entry) => entry.opId !== opId);
   setOpsQueue(queue);
   updateSyncBanner();
 }
 
-function updateBookingOperation(bookingId, operationPatch) {
-  const queue = getOpsQueue().map((entry) => {
-    if (entry.bookingId !== bookingId) return entry;
-    return {
-      ...entry,
-      ...operationPatch
-    };
-  });
+function updateBookingOperation(opId, operationPatch) {
+  const queue =
+    typeof bookingSyncStateApi.updateQueueOperation === 'function'
+      ? bookingSyncStateApi.updateQueueOperation(getOpsQueue(), opId, operationPatch)
+      : getOpsQueue().map((entry) => {
+          if (entry.opId !== opId) return entry;
+          return {
+            ...entry,
+            ...operationPatch
+          };
+        });
   setOpsQueue(queue);
   updateSyncBanner();
+}
+
+function hasBookingOperation(opId) {
+  const queue = getOpsQueue();
+  if (typeof bookingSyncStateApi.hasQueueOperation === 'function') {
+    return bookingSyncStateApi.hasQueueOperation(queue, opId);
+  }
+
+  return queue.some((entry) => entry.opId === opId);
+}
+
+function getQueueHealth() {
+  const queue = getOpsQueue();
+  const pendingEntries = queue.filter((entry) =>
+    ['pending', 'syncing', 'failed'].includes(entry.status)
+  );
+  const oldestPendingEntry = pendingEntries
+    .slice()
+    .sort((left, right) => String(left.updatedAt).localeCompare(String(right.updatedAt)))[0];
+
+  return {
+    pendingCount: pendingEntries.length,
+    oldestPendingAt: oldestPendingEntry?.updatedAt || null
+  };
+}
+
+function ensureBookingOperationEvent(entry) {
+  if (
+    entry.eventId &&
+    entry.deviceId &&
+    entry.deviceRole &&
+    Number.isFinite(Number(entry.clientSequence)) &&
+    entry.clientCreatedAt
+  ) {
+    return entry;
+  }
+
+  const patchedEntry = {
+    ...entry,
+    eventId: entry.eventId || crypto.randomUUID(),
+    deviceId: entry.deviceId || getDeviceId(),
+    deviceRole: entry.deviceRole || getDeviceRole(),
+    clientSequence: Number.isFinite(Number(entry.clientSequence))
+      ? Number(entry.clientSequence)
+      : getNextClientSequence(),
+    clientCreatedAt: entry.clientCreatedAt || new Date().toISOString()
+  };
+
+  updateBookingOperation(entry.opId, patchedEntry);
+  return patchedEntry;
 }
 function getWaitlistForSelectedDate() {
   if (!waitlistByDate.has(selectedDate)) {
@@ -617,6 +768,18 @@ function normalizeBookingRow(row) {
     colorTheme: row.color_theme || 'yellow',
     arrivalStatus: row.arrival_status === 'active' ? 'active' : 'pending',
     arrivalMarkedAt: row.arrival_marked_at || null
+  };
+}
+
+function normalizeDeletedBookingRow(row) {
+  const booking = normalizeBookingRow(row);
+  if (!booking) return null;
+
+  return {
+    ...booking,
+    deletedAt: row.deleted_at || null,
+    deletedByDeviceId: row.deleted_by_device_id || '',
+    deletedByEventId: row.deleted_by_event_id || ''
   };
 }
 
@@ -779,6 +942,7 @@ async function loadBookingsFromDatabase(date = selectedDate) {
       'id, booking_date, table_index, time_index, start_minutes, duration_slots, guest_name, guest_phone, guest_comment, guests, color_theme, arrival_status, arrival_marked_at'
     )
     .eq('booking_date', date)
+    .is('deleted_at', null)
     .order('table_index', { ascending: true })
     .order('time_index', { ascending: true });
 
@@ -830,6 +994,87 @@ async function loadWaitlistFromDatabase() {
   renderWaitlist();
 }
 
+async function loadDebugDataFromDatabase(date = selectedDate) {
+  if (!IS_DEBUG_MODE || !bookingDatabase) {
+    renderDebugView();
+    return;
+  }
+
+  const [eventsResult, deletedResult] = await Promise.all([
+    bookingDatabase
+      .from(EVENTS_TABLE)
+      .select(
+        'event_id, booking_id, booking_date, event_type, payload, device_id, device_role, client_sequence, client_created_at, server_created_at, apply_status'
+      )
+      .eq('booking_date', date)
+      .order('server_created_at', { ascending: false })
+      .limit(80),
+    bookingDatabase
+      .from(BOOKINGS_TABLE)
+      .select(
+        'id, booking_date, table_index, time_index, start_minutes, duration_slots, guest_name, guest_phone, guest_comment, guests, color_theme, arrival_status, arrival_marked_at, deleted_at, deleted_by_device_id, deleted_by_event_id'
+      )
+      .eq('booking_date', date)
+      .not('deleted_at', 'is', null)
+      .order('deleted_at', { ascending: false })
+  ]);
+
+  if (eventsResult.error) {
+    console.error('Supabase debug events load error:', eventsResult.error);
+  } else {
+    debugEventsCache = eventsResult.data || [];
+  }
+
+  if (deletedResult.error) {
+    console.error('Supabase debug deleted bookings load error:', deletedResult.error);
+  } else {
+    debugDeletedBookingsCache = (deletedResult.data || [])
+      .map(normalizeDeletedBookingRow)
+      .filter(Boolean);
+  }
+
+  renderDebugView();
+}
+
+async function restoreDeletedBookingFromDebug(bookingId) {
+  if (!IS_DEBUG_MODE || !bookingDatabase) return;
+
+  const booking = debugDeletedBookingsCache.find((entry) => entry.id === bookingId);
+  if (!booking) return;
+
+  const restoredBooking = {
+    id: booking.id,
+    tableIndex: booking.tableIndex,
+    timeIndex: booking.timeIndex,
+    startMinutes: booking.startMinutes,
+    durationSlots: booking.durationSlots,
+    name: booking.name,
+    phone: booking.phone,
+    comment: booking.comment,
+    guests: booking.guests,
+    date: booking.date,
+    colorTheme: booking.colorTheme,
+    arrivalStatus: booking.arrivalStatus || 'pending',
+    arrivalMarkedAt: booking.arrivalMarkedAt || null
+  };
+
+  const result = await applyBookingOperationOnServer(
+    createImmediateBookingOperation('restore', restoredBooking)
+  );
+
+  if (!result.ok) {
+    console.error('Supabase booking restore error:', result.error);
+    updateSyncIndicator('Ошибка восстановления');
+    return;
+  }
+
+  cacheBooking(withSyncState(restoredBooking, 'synced'));
+  storeSnapshot(restoredBooking.date);
+  await loadBookingsFromDatabase(restoredBooking.date);
+  await loadDebugDataFromDatabase(restoredBooking.date);
+  updateSyncIndicator('Онлайн');
+}
+
 async function loadThemeFromDatabase() {
   if (!bookingDatabase) return;
 
@@ -859,6 +1104,34 @@ async function upsertBookingOnServer(booking) {
   return { ok: !error, error };
 }
 
+async function applyBookingOperationOnServer(entry) {
+  if (!bookingDatabase) {
+    return { ok: false, error: new Error('Supabase unavailable') };
+  }
+
+  const syncedEntry = ensureBookingOperationEvent(entry);
+  const eventPayload =
+    typeof bookingSyncStateApi.createBookingEventPayload === 'function'
+      ? bookingSyncStateApi.createBookingEventPayload({
+          entry: syncedEntry,
+          deviceId: syncedEntry.deviceId,
+          deviceRole: syncedEntry.deviceRole,
+          clientSequence: syncedEntry.clientSequence,
+          clientCreatedAt: syncedEntry.clientCreatedAt
+        })
+      : null;
+
+  if (!eventPayload) {
+    return { ok: false, error: new Error('Booking event payload unavailable') };
+  }
+
+  const { error } = await bookingDatabase.rpc('booking_sheet_apply_event', {
+    event_payload: eventPayload
+  });
+
+  return { ok: !error, error };
+}
+
 async function saveThemeToDatabase(themeName) {
   if (!bookingDatabase || !THEMES[themeName]) return;
 
@@ -869,6 +1142,31 @@ async function saveThemeToDatabase(themeName) {
   if (error) {
     console.error('Supabase theme save error:', error);
     updateSyncIndicator('Ошибка сохранения темы');
+  }
+}
+
+async function saveDeviceStateToDatabase() {
+  if (!bookingDatabase) return;
+
+  const queueHealth = getQueueHealth();
+  const { error } = await bookingDatabase.from(DEVICE_STATE_TABLE).upsert(
+    {
+      device_id: getDeviceId(),
+      device_role: getDeviceRole(),
+      selected_date: selectedDate,
+      last_seen_at: new Date().toISOString(),
+      local_pending_count: queueHealth.pendingCount,
+      oldest_pending_at: queueHealth.oldestPendingAt,
+      last_successful_sync_at:
+        queueHealth.pendingCount === 0 ? new Date().toISOString() : null,
+      app_version: BOOKING_APP_VERSION,
+      updated_at: new Date().toISOString()
+    },
+    { onConflict: 'device_id' }
+  );
+
+  if (error) {
+    console.error('Supabase device state save error:', error);
   }
 }
 
@@ -916,15 +1214,6 @@ async function deleteWaitlistEntryFromDatabase(entry) {
   renderWaitlist();
   updateSyncIndicator('Онлайн');
   return true;
-}
-
-async function deleteBookingOnServer(bookingId) {
-  if (!bookingDatabase) {
-    return { ok: false, error: new Error('Supabase unavailable') };
-  }
-
-  const { error } = await bookingDatabase.from(BOOKINGS_TABLE).delete().eq('id', bookingId);
-  return { ok: !error, error };
 }
 
 function applyLocalBookingUpsert(booking, syncState) {
@@ -981,54 +1270,50 @@ async function flushBookingOpsQueue() {
     return;
   }
 
-  const nextQueue = [];
-
   for (const entry of queue) {
-    updateBookingOperation(entry.bookingId, {
+    updateBookingOperation(entry.opId, {
       status: 'syncing',
       updatedAt: new Date().toISOString()
     });
 
-    if (entry.type === 'delete') {
-      const deleteResult = await deleteBookingOnServer(entry.bookingId);
-      if (!deleteResult.ok) {
-        nextQueue.push({
-          ...entry,
+    const applyResult = await applyBookingOperationOnServer(entry);
+    if (!applyResult.ok) {
+      console.error('Supabase booking event apply error:', applyResult.error);
+      if (hasBookingOperation(entry.opId)) {
+        if (entry.type !== 'delete') {
+          applyLocalBookingUpsert(entry.payload, 'failed');
+        }
+        updateBookingOperation(entry.opId, {
           status: 'failed',
-          retryCount: entry.retryCount + 1,
+          retryCount: (Number(entry.retryCount) || 0) + 1,
           updatedAt: new Date().toISOString()
         });
       }
-      removeBookingOperation(entry.bookingId);
-      continue;
+      break;
     }
 
-    const upsertResult = await upsertBookingOnServer(entry.payload);
-    if (!upsertResult.ok) {
-      console.error('Supabase save error:', upsertResult.error);
-      applyLocalBookingUpsert(entry.payload, 'failed');
-      nextQueue.push({
-        ...entry,
-        status: 'failed',
-        retryCount: entry.retryCount + 1,
-        updatedAt: new Date().toISOString()
-      });
-      continue;
+    if (hasBookingOperation(entry.opId)) {
+      if (entry.type !== 'delete') {
+        applyLocalBookingUpsert(entry.payload, 'synced');
+      }
+      removeBookingOperation(entry.opId);
     }
-
-    applyLocalBookingUpsert(entry.payload, 'synced');
-    removeBookingOperation(entry.bookingId);
   }
 
-  setOpsQueue(nextQueue);
   updateSyncMeta({ lastGlobalSyncAt: new Date().toISOString() });
   updateSyncBanner();
-  if (nextQueue.length) {
+  const remainingQueue = getOpsQueue();
+  if (remainingQueue.length) {
     updateSyncIndicator('Есть несинхронизированные изменения');
   } else {
     updateSyncIndicator('Онлайн');
   }
   isFlushingBookingOpsQueue = false;
+
+  if (remainingQueue.some((entry) => entry.status === 'pending')) {
+    void flushBookingOpsQueue();
+  }
+  void saveDeviceStateToDatabase();
 }
 
 function hydrateSelectedDateFromStorage() {
@@ -1089,13 +1374,15 @@ function applyBookingRealtimePayload(payload) {
   const bookingId = payload.eventType === 'DELETE' ? payload.old?.id : payload.new?.id;
   const bookingDate =
     payload.eventType === 'DELETE' ? payload.old?.booking_date || null : payload.new?.booking_date || null;
+  const isDeletedBooking =
+    payload.eventType === 'DELETE' || Boolean(payload.new?.deleted_at);
 
   if (bookingId && getPendingBookingIds(bookingDate).has(bookingId)) {
     updateSyncIndicator('Онлайн');
     return;
   }
 
-  if (payload.eventType === 'DELETE') {
+  if (isDeletedBooking) {
     if (bookingId) {
       removeBookingFromCache(bookingId, bookingDate);
 
@@ -1116,6 +1403,20 @@ function applyBookingRealtimePayload(payload) {
   if (bookingDate === selectedDate) {
     paintBookings();
   }
+  if (IS_DEBUG_MODE && currentView === 'debug') {
+    void loadDebugDataFromDatabase(bookingDate || selectedDate);
+  }
+  updateSyncIndicator('Онлайн');
+}
+
+function applyEventRealtimePayload(payload) {
+  lastRealtimeEventAt = new Date();
+  console.info('Supabase booking event realtime payload:', payload);
+
+  if (IS_DEBUG_MODE && currentView === 'debug') {
+    void loadDebugDataFromDatabase(payload.new?.booking_date || selectedDate);
+  }
+
   updateSyncIndicator('Онлайн');
 }
 
@@ -1172,6 +1473,11 @@ function subscribeToBookingChanges() {
       { event: '*', schema: 'public', table: META_TABLE },
       applyMetaRealtimePayload
     )
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: EVENTS_TABLE },
+      applyEventRealtimePayload
+    )
     .subscribe((status, error) => {
       console.info('Supabase realtime status:', status, error || '');
 
@@ -1197,6 +1503,7 @@ async function bootstrapBookingsSync() {
   await flushBookingOpsQueue();
   await loadBookingsFromDatabase();
   await loadWaitlistFromDatabase();
+  void saveDeviceStateToDatabase();
 }
 
 function applyTheme(themeName) {
@@ -1767,20 +2074,155 @@ function renderWaitlist() {
   });
 }
 
-function setCurrentView(viewName) {
-  currentView = viewName === 'waitlist' ? 'waitlist' : 'bookings';
-  const isWaitlist = currentView === 'waitlist';
+function formatDebugDateTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+}
 
-  bookingsView.classList.toggle('hidden', isWaitlist);
+function getDebugEventLabel(eventType) {
+  const labels = {
+    booking_created: 'Создание',
+    booking_updated: 'Обновление',
+    booking_deleted: 'Удаление',
+    booking_restored: 'Восстановление',
+    arrival_toggled: 'Статус гостя',
+    waitlist_created: 'Лист ожидания',
+    waitlist_updated: 'Лист ожидания',
+    waitlist_deleted: 'Лист ожидания'
+  };
+  return labels[eventType] || eventType || 'Событие';
+}
+
+function renderDebugView() {
+  if (!IS_DEBUG_MODE) return;
+
+  debugDeletedBookings.innerHTML = '';
+  debugEvents.innerHTML = '';
+
+  if (debugDeletedBookingsCache.length === 0) {
+    const emptyDeleted = document.createElement('div');
+    emptyDeleted.className = 'debug-empty';
+    emptyDeleted.textContent = 'Удаленных броней на эту дату нет.';
+    debugDeletedBookings.append(emptyDeleted);
+  } else {
+    debugDeletedBookingsCache.forEach((booking) => {
+      const card = document.createElement('article');
+      card.className = 'debug-card';
+
+      const content = document.createElement('div');
+
+      const title = document.createElement('div');
+      title.className = 'debug-title';
+      title.textContent = `${booking.name || 'Без имени'} · стол ${getTableLabel(booking.tableIndex)}`;
+      content.append(title);
+
+      const meta = document.createElement('div');
+      meta.className = 'debug-meta';
+      meta.textContent = `${minutesToLabel(booking.startMinutes)} · ${booking.guests} гост. · удалено ${formatDebugDateTime(booking.deletedAt)}`;
+      content.append(meta);
+
+      if (booking.phone || booking.comment) {
+        const comment = document.createElement('div');
+        comment.className = 'debug-comment';
+        comment.textContent = [booking.phone, booking.comment].filter(Boolean).join(' · ');
+        content.append(comment);
+      }
+
+      const restoreButton = document.createElement('button');
+      restoreButton.type = 'button';
+      restoreButton.className = 'debug-restore-btn';
+      restoreButton.textContent = 'Вернуть';
+      restoreButton.addEventListener('click', () => {
+        void restoreDeletedBookingFromDebug(booking.id);
+      });
+
+      card.append(content, restoreButton);
+      debugDeletedBookings.append(card);
+    });
+  }
+
+  if (debugEventsCache.length === 0) {
+    const emptyEvents = document.createElement('div');
+    emptyEvents.className = 'debug-empty';
+    emptyEvents.textContent = 'Событий на эту дату пока нет.';
+    debugEvents.append(emptyEvents);
+    return;
+  }
+
+  debugEventsCache.forEach((eventRow) => {
+    const card = document.createElement('article');
+    card.className = 'debug-card';
+
+    const content = document.createElement('div');
+
+    const title = document.createElement('div');
+    title.className = 'debug-title';
+    title.textContent = getDebugEventLabel(eventRow.event_type);
+    content.append(title);
+
+    const meta = document.createElement('div');
+    meta.className = 'debug-meta';
+    meta.textContent = [
+      formatDebugDateTime(eventRow.server_created_at),
+      eventRow.device_role || 'unknown',
+      eventRow.apply_status || 'applied'
+    ].join(' · ');
+    content.append(meta);
+
+    const payload = eventRow.payload || {};
+    const payloadSummary = [payload.guest_name, payload.guest_phone, payload.guest_comment]
+      .filter(Boolean)
+      .join(' · ');
+    if (payloadSummary) {
+      const comment = document.createElement('div');
+      comment.className = 'debug-comment';
+      comment.textContent = payloadSummary;
+      content.append(comment);
+    }
+
+    card.append(content);
+    debugEvents.append(card);
+  });
+}
+
+function setCurrentView(viewName) {
+  currentView =
+    viewName === 'debug' && IS_DEBUG_MODE
+      ? 'debug'
+      : viewName === 'waitlist'
+        ? 'waitlist'
+        : 'bookings';
+  const isWaitlist = currentView === 'waitlist';
+  const isDebug = currentView === 'debug';
+
+  bookingsView.classList.toggle('hidden', isWaitlist || isDebug);
   waitlistView.classList.toggle('hidden', !isWaitlist);
-  bookingsViewBtn.classList.toggle('active', !isWaitlist);
+  debugView.classList.toggle('hidden', !isDebug);
+  bookingsViewBtn.classList.toggle('active', currentView === 'bookings');
   waitlistViewBtn.classList.toggle('active', isWaitlist);
-  pageTitleLabel.textContent = isWaitlist ? 'Лист ожидания на' : 'Лист броней на';
+  debugViewBtn.classList.toggle('active', isDebug);
+  pageTitleLabel.textContent = isDebug
+    ? 'История на'
+    : isWaitlist
+      ? 'Лист ожидания на'
+      : 'Лист броней на';
   viewMenu.removeAttribute('open');
 
   if (isWaitlist) {
     setExtendMode(false);
     renderWaitlist();
+  } else if (isDebug) {
+    setExtendMode(false);
+    renderDebugView();
+    void loadDebugDataFromDatabase();
   } else {
     fitBoardToViewport();
     paintBookings();
@@ -1828,6 +2270,7 @@ function resetModalState() {
 
 function initEvents() {
   applyTheme(currentTheme);
+  debugViewBtn.classList.toggle('hidden', !IS_DEBUG_MODE);
 
   bookingDateInput.value = selectedDate;
   bookingDateInput.addEventListener('change', () => {
@@ -1890,6 +2333,10 @@ function initEvents() {
 
   waitlistViewBtn.addEventListener('click', () => {
     setCurrentView('waitlist');
+  });
+
+  debugViewBtn.addEventListener('click', () => {
+    setCurrentView('debug');
   });
 
   waitlistForm.addEventListener('submit', async (event) => {
@@ -2086,12 +2533,21 @@ function initEvents() {
   }, BOOKING_SYNC_RETRY_INTERVAL_MS);
 
   setInterval(() => {
+    void saveDeviceStateToDatabase();
+  }, BOOKING_DEVICE_HEARTBEAT_INTERVAL_MS);
+
+  setInterval(() => {
     paintBookings();
     updateNowIndicatorPosition();
   }, 30000);
 }
 
-populateTimeSelect();
-renderGrid();
-initEvents();
-void bootstrapBookingsSync();
+async function startApp() {
+  await initializeBookingLocalStore();
+  populateTimeSelect();
+  renderGrid();
+  initEvents();
+  await bootstrapBookingsSync();
+}
+
+void startApp();

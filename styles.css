@@ -821,6 +821,83 @@ body {
   cursor: pointer;
 }
 
+.debug-view {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 12px;
+}
+
+.debug-panel {
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgba(95, 90, 83, 0.2);
+  border-radius: 12px;
+  background: var(--panel);
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.debug-panel-header {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(95, 90, 83, 0.14);
+}
+
+.debug-panel-header h2 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.debug-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.debug-empty {
+  padding: 14px;
+  color: #6e655b;
+  font-size: 0.9rem;
+}
+
+.debug-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 10px 8px;
+  border-bottom: 1px solid rgba(95, 90, 83, 0.12);
+}
+
+.debug-card:last-child {
+  border-bottom: 0;
+}
+
+.debug-title {
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+
+.debug-meta,
+.debug-comment {
+  margin-top: 4px;
+  color: #5f564b;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.debug-restore-btn {
+  align-self: start;
+  border: 0;
+  border-radius: 10px;
+  background: #e4f2df;
+  color: #244d1f;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
 @media (max-width: 767px) {
   .page-shell {
     padding: 8px;
@@ -978,5 +1055,19 @@ body {
 
   .waitlist-card {
     padding: 12px 8px;
+  }
+
+  .debug-view {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .debug-panel {
+    min-height: 220px;
+    border-radius: 14px;
+  }
+
+  .debug-card {
+    grid-template-columns: 1fr;
   }
 }
