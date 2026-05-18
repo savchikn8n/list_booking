@@ -62,6 +62,27 @@
     return (queue || []).some((entry) => entry?.opId === opId);
   }
 
+  function normalizeQueueOperation(entry, index = 0) {
+    const bookingId = entry?.bookingId || entry?.payload?.id || entry?.payload?.booking_id || 'unknown';
+    const operationType = entry?.type || 'upsert';
+    const updatedAt = entry?.updatedAt || new Date().toISOString();
+
+    return {
+      ...entry,
+      opId: entry?.opId || `${bookingId}:${operationType}:legacy:${index}:${updatedAt}`,
+      type: operationType,
+      bookingId,
+      date: entry?.date || entry?.payload?.date || entry?.payload?.booking_date || '',
+      status: entry?.status === 'syncing' ? 'pending' : entry?.status || 'pending',
+      retryCount: Number(entry?.retryCount) || 0,
+      updatedAt
+    };
+  }
+
+  function normalizeQueueOperations(queue) {
+    return (queue || []).map(normalizeQueueOperation);
+  }
+
   function toDatabaseBookingPayload(booking) {
     if (!booking) return {};
 
@@ -130,6 +151,7 @@
     getUnsyncedBookingIds,
     createBookingEventPayload,
     recoverQueueFromSnapshot,
+    normalizeQueueOperations,
     removeQueueOperation,
     updateQueueOperation,
     hasQueueOperation

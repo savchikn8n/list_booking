@@ -122,6 +122,7 @@ const bookingLocalStore =
 const BOOKING_SYNC_RETRY_INTERVAL_MS = 5000;
 const BOOKING_RESTORE_THROTTLE_MS = 1500;
 const BOOKING_DEVICE_HEARTBEAT_INTERVAL_MS = 30000;
+const BOOKING_RPC_TIMEOUT_MS = 15000;
 const BOOKING_APP_VERSION = '2026-05-18-sync-hardening';
 const IS_DEBUG_MODE = new URLSearchParams(window.location.search).get('debug') === '1';
 const INITIAL_VIEW =
@@ -501,6 +502,40 @@ function setOpsQueue(queue) {
   return writeJsonStorage(OPS_QUEUE_STORAGE_KEY, queue);
 }
 
+function normalizeOpsQueue({ forcePending = false } = {}) {
+  const queue = getOpsQueue();
+  const normalizedQueue =
+    typeof bookingSyncStateApi.normalizeQueueOperations === 'function'
+      ? bookingSyncStateApi.normalizeQueueOperations(queue)
+      : queue.map((entry, index) => {
+          const bookingId = entry.bookingId || entry.payload?.id || `unknown-${index}`;
+          const operationType = entry.type || 'upsert';
+          return {
+            ...entry,
+            opId: entry.opId || `${bookingId}:${operationType}:legacy:${index}:${entry.updatedAt || Date.now()}`,
+            type: operationType,
+            bookingId,
+            date: entry.date || entry.payload?.date || entry.payload?.booking_date || '',
+            status: entry.status === 'syncing' ? 'pending' : entry.status || 'pending',
+            retryCount: Number(entry.retryCount) || 0,
+            updatedAt: entry.updatedAt || new Date().toISOString()
+          };
+        });
+  const nextQueue = forcePending
+    ? normalizedQueue.map((entry) => ({
+        ...entry,
+        status: entry.status === 'syncing' ? 'pending' : entry.status
+      }))
+    : normalizedQueue;
+  const didChange = JSON.stringify(queue) !== JSON.stringify(nextQueue);
+
+  if (didChange) {
+    setOpsQueue(nextQueue);
+  }
+
+  return nextQueue;
+}
+
 function enqueueBookingOperation(type, booking) {
   const queue = getOpsQueue();
   queue.push({
@@ -688,6 +723,12 @@ function hasBookingOperation(opId) {
   return queue.some((entry) => entry.opId === opId);
 }
 
+function getErrorMessage(error) {
+  if (!error) return 'Неизвестная ошибка';
+  if (typeof error === 'string') return error;
+  return error.message || error.details || error.hint || JSON.stringify(error);
+}
+
 function getQueueHealth() {
   const queue = getOpsQueue();
   const pendingEntries = queue.filter((entry) =>
@@ -716,6 +757,7 @@ function ensureBookingOperationEvent(entry) {
 
   const patchedEntry = {
     ...entry,
+    opId: entry.opId || `${entry.bookingId || entry.payload?.id || 'unknown'}:${entry.type || 'upsert'}:${Date.now()}`,
     eventId: entry.eventId || crypto.randomUUID(),
     deviceId: entry.deviceId || getDeviceId(),
     deviceRole: entry.deviceRole || getDeviceRole(),
@@ -1131,11 +1173,32 @@ async function applyBookingOperationOnServer(entry) {
     return { ok: false, error: new Error('Booking event payload unavailable') };
   }
 
-  const { error } = await bookingDatabase.rpc('booking_sheet_apply_event', {
-    event_payload: eventPayload
-  });
+  const timeoutController = new AbortController();
+  const timeoutId = setTimeout(() => {
+    timeoutController.abort();
+  }, BOOKING_RPC_TIMEOUT_MS);
 
-  return { ok: !error, error };
+  try {
+    const rpcRequest = bookingDatabase.rpc('booking_sheet_apply_event', {
+      event_payload: eventPayload
+    });
+    const requestWithTimeout =
+      typeof rpcRequest.abortSignal === 'function'
+        ? rpcRequest.abortSignal(timeoutController.signal)
+        : Promise.race([
+            rpcRequest,
+            new Promise((_, reject) => {
+              setTimeout(() => reject(new Error('Supabase RPC timeout')), BOOKING_RPC_TIMEOUT_MS);
+            })
+          ]);
+    const { error } = await requestWithTimeout;
+
+    return { ok: !error, error };
+  } catch (error) {
+    return { ok: false, error };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function saveThemeToDatabase(themeName) {
@@ -1268,58 +1331,71 @@ function reconcileBookingsForDate(date, serverBookings) {
 async function flushBookingOpsQueue() {
   if (isFlushingBookingOpsQueue) return;
   isFlushingBookingOpsQueue = true;
+  let shouldFlushAgain = false;
 
-  const queue = getOpsQueue();
-  if (!queue.length) {
-    isFlushingBookingOpsQueue = false;
-    updateSyncBanner();
-    return;
-  }
+  try {
+    const queue = normalizeOpsQueue();
+    if (!queue.length) {
+      updateSyncBanner();
+      return;
+    }
 
-  for (const entry of queue) {
-    updateBookingOperation(entry.opId, {
-      status: 'syncing',
-      updatedAt: new Date().toISOString()
-    });
+    for (const entry of queue) {
+      updateBookingOperation(entry.opId, {
+        status: 'syncing',
+        lastError: '',
+        updatedAt: new Date().toISOString()
+      });
 
-    const applyResult = await applyBookingOperationOnServer(entry);
-    if (!applyResult.ok) {
-      console.error('Supabase booking event apply error:', applyResult.error);
+      const applyResult = await applyBookingOperationOnServer(entry);
+      if (!applyResult.ok) {
+        console.error('Supabase booking event apply error:', applyResult.error);
+        if (hasBookingOperation(entry.opId)) {
+          if (entry.type !== 'delete') {
+            applyLocalBookingUpsert(entry.payload, 'failed');
+          }
+          updateBookingOperation(entry.opId, {
+            status: 'failed',
+            retryCount: (Number(entry.retryCount) || 0) + 1,
+            lastError: getErrorMessage(applyResult.error),
+            updatedAt: new Date().toISOString()
+          });
+        }
+        break;
+      }
+
       if (hasBookingOperation(entry.opId)) {
         if (entry.type !== 'delete') {
-          applyLocalBookingUpsert(entry.payload, 'failed');
+          applyLocalBookingUpsert(entry.payload, 'synced');
         }
-        updateBookingOperation(entry.opId, {
-          status: 'failed',
-          retryCount: (Number(entry.retryCount) || 0) + 1,
-          updatedAt: new Date().toISOString()
-        });
+        removeBookingOperation(entry.opId);
       }
-      break;
     }
 
-    if (hasBookingOperation(entry.opId)) {
-      if (entry.type !== 'delete') {
-        applyLocalBookingUpsert(entry.payload, 'synced');
-      }
-      removeBookingOperation(entry.opId);
+    updateSyncMeta({ lastGlobalSyncAt: new Date().toISOString() });
+    updateSyncBanner();
+    const remainingQueue = getOpsQueue();
+    if (remainingQueue.length) {
+      updateSyncIndicator('Есть несинхронизированные изменения');
+    } else {
+      updateSyncIndicator('Онлайн');
     }
-  }
 
-  updateSyncMeta({ lastGlobalSyncAt: new Date().toISOString() });
-  updateSyncBanner();
-  const remainingQueue = getOpsQueue();
-  if (remainingQueue.length) {
+    shouldFlushAgain = remainingQueue.some((entry) => entry.status === 'pending');
+    void saveDeviceStateToDatabase();
+  } catch (error) {
+    console.error('Booking queue flush error:', error);
+    normalizeOpsQueue({ forcePending: true });
     updateSyncIndicator('Есть несинхронизированные изменения');
-  } else {
-    updateSyncIndicator('Онлайн');
+  } finally {
+    isFlushingBookingOpsQueue = false;
+    if (IS_DEBUG_MODE && currentView === 'debug') {
+      renderDebugView();
+    }
+    if (shouldFlushAgain) {
+      void flushBookingOpsQueue();
+    }
   }
-  isFlushingBookingOpsQueue = false;
-
-  if (remainingQueue.some((entry) => entry.status === 'pending')) {
-    void flushBookingOpsQueue();
-  }
-  void saveDeviceStateToDatabase();
 }
 
 function hydrateSelectedDateFromStorage() {
@@ -1376,6 +1452,9 @@ async function refreshSelectedDateData() {
 async function retryDebugSyncNow() {
   if (!IS_DEBUG_MODE) return;
 
+  isFlushingBookingOpsQueue = false;
+  normalizeOpsQueue({ forcePending: true });
+  renderDebugView();
   debugSyncRetryBtn.disabled = true;
   debugSyncRetryBtn.textContent = 'Жму...';
   try {
@@ -2166,7 +2245,8 @@ function renderDebugView() {
       comment.className = 'debug-comment';
       comment.textContent = [
         entry.updatedAt ? `updated ${formatDebugDateTime(entry.updatedAt)}` : '',
-        entry.eventId ? `event ${entry.eventId}` : 'legacy event'
+        entry.eventId ? `event ${entry.eventId}` : 'legacy event',
+        entry.lastError ? `error ${entry.lastError}` : ''
       ]
         .filter(Boolean)
         .join(' · ');

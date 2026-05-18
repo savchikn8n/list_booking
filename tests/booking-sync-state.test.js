@@ -3,6 +3,7 @@ const {
   getBlockingBookingIds,
   getUnsyncedBookingIds,
   createBookingEventPayload,
+  normalizeQueueOperations,
   recoverQueueFromSnapshot,
   hasQueueOperation,
   removeQueueOperation,
@@ -67,6 +68,32 @@ assert.deepStrictEqual(
 
 assert.strictEqual(hasQueueOperation(queueWithSupersededOperation, 'booking-1:delete:new'), true);
 assert.strictEqual(hasQueueOperation(queueWithSupersededOperation, 'missing-op'), false);
+
+const normalizedLegacyQueue = normalizeQueueOperations([
+  {
+    type: 'upsert',
+    bookingId: 'legacy-1',
+    date: '2026-05-20',
+    status: 'syncing',
+    payload: { id: 'legacy-1', date: '2026-05-20' },
+    updatedAt: '2026-05-18T12:02:00.000Z'
+  },
+  {
+    opId: 'modern-1:upsert:1',
+    type: 'upsert',
+    bookingId: 'modern-1',
+    date: '2026-05-20',
+    status: 'failed',
+    retryCount: 2,
+    payload: { id: 'modern-1', date: '2026-05-20' }
+  }
+]);
+
+assert.strictEqual(normalizedLegacyQueue[0].opId, 'legacy-1:upsert:legacy:0:2026-05-18T12:02:00.000Z');
+assert.strictEqual(normalizedLegacyQueue[0].status, 'pending');
+assert.strictEqual(normalizedLegacyQueue[1].opId, 'modern-1:upsert:1');
+assert.strictEqual(normalizedLegacyQueue[1].status, 'failed');
+assert.strictEqual(normalizedLegacyQueue[1].retryCount, 2);
 
 const eventPayload = createBookingEventPayload({
   entry: {
